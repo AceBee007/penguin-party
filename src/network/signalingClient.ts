@@ -1,0 +1,136 @@
+import type {
+  CreateRoomRequest,
+  CreateRoomResponse,
+  JoinRoomRequest,
+  JoinRoomResponse,
+  NetworkIdentity,
+  RoomMetadata,
+  SignalingClientMessage,
+  SignalingServerMessage,
+} from './types';
+
+const DEFAULT_SIGNALING_URL = 'http://127.0.0.1:8787';
+
+export function getSignalingHttpUrl(): string {
+  const fromQuery = new URLSearchParams(window.location.search).get('signal');
+  return (fromQuery ?? DEFAULT_SIGNALING_URL).replace(/\/$/, '');
+}
+
+export function getSignalingWsUrl(httpUrl = getSignalingHttpUrl()): string {
+  const url = new URL(httpUrl);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = '/signaling';
+  return url.toString();
+}
+
+export async function listRooms(httpUrl = getSignalingHttpUrl()): Promise<RoomMetadata[]> {
+  const response = await fetch(`${httpUrl}/rooms`);
+  const payload = (await response.json()) as { rooms: RoomMetadata[] };
+  return payload.rooms;
+}
+
+export async function createRoom(request: CreateRoomRequest, httpUrl = getSignalingHttpUrl()): Promise<NetworkIdentity> {
+  const response = await fetch(`${httpUrl}/rooms`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Room creation failed: ${response.status}`);
+  }
+
+  const payload = (await response.json()) as CreateRoomResponse;
+  return {
+    ...payload,
+    joinedAt: payload.room.createdAt,
+    displayName: request.hostDisplayName,
+  };
+}
+
+export async function joinRoom(
+  roomId: string,
+  request: JoinRoomRequest,
+  httpUrl = getSignalingHttpUrl(),
+): Promise<NetworkIdentity> {
+  const response = await fetch(`${httpUrl}/rooms/${roomId}/join`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  const payload = (await response.json()) as JoinRoomResponse | { code: string; message: string };
+
+  if (!response.ok || 'code' in payload) {
+    throw new Error('message' in payload ? payload.message : `Join failed: ${response.status}`);
+  }
+
+  return {
+    ...payload,
+    joinedAt: Date.now(),
+    displayName: request.displayName,
+  };
+}
+
+export async function markRoomPlaying(roomId: string, httpUrl = getSignalingHttpUrl()): Promise<void> {
+  await fetch(`${httpUrl}/rooms/${roomId}/status`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ status: 'playing' }),
+  });
+}
+
+export class SignalingClient {
+  private socket: WebSocket | null = null;
+
+  constructor(
+    private readonly identity: NetworkIdentity,
+    private readonly onMessage: (message: SignalingServerMessage) => void,
+    private readonly onStatus: (status: string) => void,
+  ) {}
+
+  connect(wsUrl = getSignalingWsUrl()): void {
+    this.socket = new WebSocket(wsUrl);
+    this.onStatus('signaling');
+    this.socket.addEventListener('open', () => {
+      this.send({
+        type: 'hello',
+        roomId: this.identity.room.roomId,
+        peerId: this.identity.peerId,
+        signalingToken: this.identity.signalingToken,
+      });
+    });
+    this.socket.addEventListener('message', (event) => {
+      const message = parseMessage(event.data);
+
+      if (message) {
+        this.onMessage(message);
+      }
+    });
+    this.socket.addEventListener('close', () => {
+      this.onStatus('closed');
+    });
+    this.socket.addEventListener('error', () => {
+      this.onStatus('error');
+    });
+  }
+
+  send(message: SignalingClientMessage): void {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(message));
+    }
+  }
+
+  close(): void {
+    this.send({ type: 'leave_room' });
+    this.socket?.close();
+    this.socket = null;
+  }
+}
+
+function parseMessage(data: unknown): SignalingServerMessage | null {
+  try {
+    return JSON.parse(String(data)) as SignalingServerMessage;
+  } catch {
+    return null;
+  }
+}

@@ -13,6 +13,8 @@ import type { CardColor, CardId, GameSessionState, LegalMove, MoveTarget, Player
 interface PixiDragStageProps {
   game: GameSessionState;
   activePlayerId: PlayerId | null;
+  handPlayerId?: PlayerId | null;
+  canPlay?: boolean;
   legalMoves: LegalMove[];
   onPlayCard: (cardId: CardId, target: MoveTarget) => void;
   onDragStatusChange: (status: StageDragStatus) => void;
@@ -68,6 +70,8 @@ const DESTROY_OPTIONS = { children: true };
 export function PixiDragStage({
   game,
   activePlayerId,
+  handPlayerId,
+  canPlay = true,
   legalMoves,
   onPlayCard,
   onDragStatusChange,
@@ -88,7 +92,8 @@ export function PixiDragStage({
     void startPixiGameStage(
       mount,
       game,
-      activePlayerId,
+      handPlayerId ?? activePlayerId,
+      canPlay,
       legalMoves,
       onPlayCard,
       onDragStatusChange,
@@ -109,7 +114,7 @@ export function PixiDragStage({
         app = null;
       }
     };
-  }, [activePlayerId, game, legalMoveKey, legalMoves, onDragStatusChange, onPlayCard]);
+  }, [activePlayerId, canPlay, game, handPlayerId, legalMoveKey, legalMoves, onDragStatusChange, onPlayCard]);
 
   return <div className="pixi-root" data-pixi-root ref={mountRef} />;
 }
@@ -117,7 +122,8 @@ export function PixiDragStage({
 async function startPixiGameStage(
   mount: HTMLDivElement,
   game: GameSessionState,
-  activePlayerId: PlayerId | null,
+  handPlayerId: PlayerId | null,
+  canPlay: boolean,
   legalMoves: LegalMove[],
   onPlayCard: (cardId: CardId, target: MoveTarget) => void,
   onDragStatusChange: (status: StageDragStatus) => void,
@@ -198,7 +204,7 @@ async function startPixiGameStage(
     boardLayer.removeChildren();
     handLayer.removeChildren();
     drawBoard(boardLayer, boardLayout, game);
-    drawHand(handLayer, dragLayer, boardLayout, game, activePlayerId, legalMoves, (nextDragState) => {
+    drawHand(handLayer, dragLayer, boardLayout, game, handPlayerId, canPlay, legalMoves, (nextDragState) => {
       dragState = nextDragState;
       drawLegalTargets(targetLayer, boardLayout, dragState.legalTargets, null);
       onDragStatusChange({
@@ -289,18 +295,19 @@ function drawHand(
   dragLayer: Container,
   boardLayout: BoardLayout,
   game: GameSessionState,
-  activePlayerId: PlayerId | null,
+  handPlayerId: PlayerId | null,
+  canPlay: boolean,
   legalMoves: LegalMove[],
   onStartDrag: (dragState: DragState) => void,
 ) {
   const round = game.currentRound;
 
-  if (!round || !activePlayerId || game.status !== 'round_active') {
+  if (!round || !handPlayerId || game.status !== 'round_active') {
     drawCenteredLabel(handLayer, 'Round complete', boardLayout.originX, boardLayout.baseY + boardLayout.cardHeight * 2.2);
     return;
   }
 
-  const player = getCurrentRoundPlayer(game, activePlayerId);
+  const player = getCurrentRoundPlayer(game, handPlayerId);
 
   if (!player) {
     return;
@@ -319,7 +326,7 @@ function drawHand(
 
   player.handCardIds.forEach((cardId, index) => {
     const card = game.cardsById[cardId];
-    const cardLegalMoves = legalMoves.filter((move) => move.cardId === cardId);
+    const cardLegalMoves = canPlay ? legalMoves.filter((move) => move.cardId === cardId) : [];
     const cardLayout: CardLayout = {
       centerX: startX + spacing * index,
       centerY: handY,

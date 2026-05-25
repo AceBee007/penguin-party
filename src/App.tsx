@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { MultiplayerGame } from './components/MultiplayerGame';
 import { PixiDragStage, type StageDragStatus } from './components/PixiDragStage';
 import {
   CARD_COLOR_LABELS,
@@ -19,6 +20,16 @@ const INITIAL_DRAG_STATUS: StageDragStatus = {
 };
 
 export function App() {
+  const isMultiplayerMode = new URLSearchParams(window.location.search).get('mode') === 'multiplayer';
+
+  if (isMultiplayerMode) {
+    return <MultiplayerGame />;
+  }
+
+  return <LocalGame />;
+}
+
+function LocalGame() {
   const [game, setGame] = useState(() => createLocalGame({ playerCount: 2, seed: 'goal-1-local' }));
   const [dragStatus, setDragStatus] = useState<StageDragStatus>(INITIAL_DRAG_STATUS);
   const [message, setMessage] = useState('Drag a card to a highlighted pyramid slot.');

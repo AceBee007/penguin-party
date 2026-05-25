@@ -13,12 +13,20 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     trace: 'on-first-retry',
   },
-  webServer: {
-    command: 'npm run dev -- --host 127.0.0.1',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120000,
-    url: 'http://127.0.0.1:5173',
-  },
+  webServer: [
+    {
+      command: 'npm run dev -- --host 127.0.0.1',
+      reuseExistingServer: !process.env.CI,
+      timeout: 120000,
+      url: 'http://127.0.0.1:5173',
+    },
+    {
+      command: 'npm run signaling',
+      reuseExistingServer: !process.env.CI,
+      timeout: 120000,
+      url: 'http://127.0.0.1:8787/health',
+    },
+  ],
   projects: [
     {
       name: 'desktop-chromium',

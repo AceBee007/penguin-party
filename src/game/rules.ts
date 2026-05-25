@@ -48,6 +48,7 @@ export const CARD_COLOR_LABELS: Record<CardColor, string> = {
 interface CreateLocalGameOptions {
   playerCount?: number;
   seed?: string;
+  playerNames?: string[];
 }
 
 interface PlayResult {
@@ -77,7 +78,7 @@ export function createLocalGame(options: CreateLocalGameOptions = {}): GameSessi
   const players: GamePlayerState[] = Array.from({ length: playerCount }, (_, index) => ({
     playerId: `player-${index + 1}`,
     seatIndex: index,
-    displayName: index === 0 ? 'You' : `Player ${index + 1}`,
+    displayName: options.playerNames?.[index] ?? (index === 0 ? 'You' : `Player ${index + 1}`),
     isHost: index === 0,
     isLocal: true,
     totalPenalty: 0,
