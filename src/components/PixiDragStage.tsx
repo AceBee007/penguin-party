@@ -1,37 +1,79 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import {
   Application,
-  Assets,
   Container,
   FederatedPointerEvent,
   Graphics,
   Rectangle,
-  Sprite,
-  Texture,
+  Text,
 } from 'pixi.js';
-import penguinTokenUrl from '../assets/penguin-token.svg';
-
-export interface DragStatus {
-  selectedToken: string;
-  position: string;
-}
+import { CARD_COLOR_LABELS, getCurrentRoundPlayer, sameTarget } from '../game/rules';
+import type { CardColor, CardId, GameSessionState, LegalMove, MoveTarget, PlayerId } from '../game/types';
 
 interface PixiDragStageProps {
-  onDragStatusChange: (status: DragStatus) => void;
+  game: GameSessionState;
+  activePlayerId: PlayerId | null;
+  legalMoves: LegalMove[];
+  onPlayCard: (cardId: CardId, target: MoveTarget) => void;
+  onDragStatusChange: (status: StageDragStatus) => void;
 }
 
-interface PenguinToken {
-  id: string;
-  label: string;
-  sprite: Sprite;
-  home: { x: number; y: number };
+export interface StageDragStatus {
+  selectedCard: string;
+  target: string;
 }
 
-const TOKEN_SIZE = 92;
-const TOKEN_COLORS = [0xe4564f, 0xf1b64b, 0x2f9c95, 0x345f8c, 0x8d5bb5, 0x57a6c7];
+interface CardLayout {
+  centerX: number;
+  centerY: number;
+  width: number;
+  height: number;
+}
 
-export function PixiDragStage({ onDragStatusChange }: PixiDragStageProps) {
+interface BoardLayout {
+  cardWidth: number;
+  cardHeight: number;
+  gapX: number;
+  rowRise: number;
+  originX: number;
+  baseY: number;
+}
+
+interface DragState {
+  cardId: CardId;
+  container: Container;
+  legalTargets: MoveTarget[];
+  offsetX: number;
+  offsetY: number;
+}
+
+const COLOR_HEX: Record<CardColor, number> = {
+  green: 0x38a169,
+  yellow: 0xf2c94c,
+  red: 0xeb5757,
+  purple: 0x8d5bb5,
+  blue: 0x2f80ed,
+};
+
+const COLOR_TEXT: Record<CardColor, number> = {
+  green: 0xf7fff7,
+  yellow: 0x1d2b32,
+  red: 0xffffff,
+  purple: 0xffffff,
+  blue: 0xffffff,
+};
+
+const DESTROY_OPTIONS = { children: true };
+
+export function PixiDragStage({
+  game,
+  activePlayerId,
+  legalMoves,
+  onPlayCard,
+  onDragStatusChange,
+}: PixiDragStageProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const legalMoveKey = useMemo(() => serializeLegalMoves(legalMoves), [legalMoves]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -43,11 +85,19 @@ export function PixiDragStage({ onDragStatusChange }: PixiDragStageProps) {
     let destroyed = false;
     let app: Application | null = null;
 
-    void startPixiDragScaffold(mount, onDragStatusChange, () => destroyed).then((createdApp) => {
+    void startPixiGameStage(
+      mount,
+      game,
+      activePlayerId,
+      legalMoves,
+      onPlayCard,
+      onDragStatusChange,
+      () => destroyed,
+    ).then((createdApp) => {
       app = createdApp;
 
       if (destroyed) {
-        app.destroy({ removeView: true }, { children: true });
+        app.destroy({ removeView: true }, DESTROY_OPTIONS);
       }
     });
 
@@ -55,18 +105,22 @@ export function PixiDragStage({ onDragStatusChange }: PixiDragStageProps) {
       destroyed = true;
 
       if (app) {
-        app.destroy({ removeView: true }, { children: true });
+        app.destroy({ removeView: true }, DESTROY_OPTIONS);
         app = null;
       }
     };
-  }, [onDragStatusChange]);
+  }, [activePlayerId, game, legalMoveKey, legalMoves, onDragStatusChange, onPlayCard]);
 
   return <div className="pixi-root" data-pixi-root ref={mountRef} />;
 }
 
-async function startPixiDragScaffold(
+async function startPixiGameStage(
   mount: HTMLDivElement,
-  onDragStatusChange: (status: DragStatus) => void,
+  game: GameSessionState,
+  activePlayerId: PlayerId | null,
+  legalMoves: LegalMove[],
+  onPlayCard: (cardId: CardId, target: MoveTarget) => void,
+  onDragStatusChange: (status: StageDragStatus) => void,
   isDestroyed: () => boolean,
 ) {
   const app = new Application();
@@ -74,7 +128,7 @@ async function startPixiDragScaffold(
   await app.init({
     antialias: true,
     autoDensity: true,
-    background: '#dff2f0',
+    background: '#e8f4f3',
     resizeTo: mount,
     resolution: Math.min(window.devicePixelRatio || 1, 2),
   });
@@ -83,178 +137,367 @@ async function startPixiDragScaffold(
     return app;
   }
 
-  app.canvas.setAttribute('aria-label', 'Penguin Party sprite stage');
+  app.canvas.setAttribute('aria-label', 'Penguin Party game board');
   mount.appendChild(app.canvas);
 
-  const world = new Container();
   const background = new Graphics();
-  const lanes = new Graphics();
-  const tokenLayer = new Container();
+  const boardLayer = new Container();
+  const targetLayer = new Container();
+  const handLayer = new Container();
+  const dragLayer = new Container();
 
-  world.addChild(background, lanes, tokenLayer);
-  app.stage.addChild(world);
+  app.stage.addChild(background, targetLayer, boardLayer, handLayer, dragLayer);
   app.stage.eventMode = 'static';
+  app.stage.hitArea = new Rectangle(0, 0, app.screen.width, app.screen.height);
 
-  const texture = await Assets.load<Texture>(penguinTokenUrl);
-
-  if (isDestroyed()) {
-    return app;
-  }
-
-  const tokens = createPenguinTokens(texture, tokenLayer);
-  let activeToken: PenguinToken | null = null;
-  const dragOffset = { x: 0, y: 0 };
+  let dragState: DragState | null = null;
   const lastScreenSize = { width: 0, height: 0 };
 
-  tokens.forEach((token) => {
-    token.sprite.on('pointerdown', (event) => {
-      activeToken = token;
-      tokenLayer.addChild(token.sprite);
-
-      const pointer = tokenLayer.toLocal(event.global);
-      dragOffset.x = token.sprite.x - pointer.x;
-      dragOffset.y = token.sprite.y - pointer.y;
-
-      token.sprite.alpha = 0.92;
-      token.sprite.scale.set(0.82);
-      token.sprite.cursor = 'grabbing';
-      publishDragStatus(onDragStatusChange, token.label, token.sprite.x, token.sprite.y);
-    });
-
-    token.sprite.on('pointerup', endDrag);
-    token.sprite.on('pointerupoutside', endDrag);
-  });
-
   app.stage.on('globalpointermove', (event: FederatedPointerEvent) => {
-    if (!activeToken) {
+    if (!dragState) {
       return;
     }
 
-    const pointer = tokenLayer.toLocal(event.global);
-    const nextX = clamp(pointer.x + dragOffset.x, TOKEN_SIZE / 2, app.screen.width - TOKEN_SIZE / 2);
-    const nextY = clamp(pointer.y + dragOffset.y, TOKEN_SIZE / 2, app.screen.height - TOKEN_SIZE / 2);
+    const pointer = dragLayer.toLocal(event.global);
+    dragState.container.position.set(pointer.x + dragState.offsetX, pointer.y + dragState.offsetY);
+    const boardLayout = createBoardLayout(app.screen.width, app.screen.height, game, legalMoves);
+    const hovered = findNearestTarget(pointer.x, pointer.y, dragState.legalTargets, boardLayout);
 
-    activeToken.sprite.position.set(nextX, nextY);
-    publishDragStatus(onDragStatusChange, activeToken.label, nextX, nextY);
-  });
-
-  app.stage.on('pointerup', endDrag);
-  app.stage.on('pointerupoutside', endDrag);
-
-  app.ticker.add((ticker) => {
-    if (lastScreenSize.width !== app.screen.width || lastScreenSize.height !== app.screen.height) {
-      lastScreenSize.width = app.screen.width;
-      lastScreenSize.height = app.screen.height;
-      app.stage.hitArea = new Rectangle(0, 0, app.screen.width, app.screen.height);
-      drawStage(background, lanes, app.screen.width, app.screen.height);
-      layoutTokens(tokens, app.screen.width, app.screen.height);
-    }
-
-    tokens.forEach((token, index) => {
-      if (token === activeToken) {
-        return;
-      }
-
-      const bob = Math.sin(performance.now() / 520 + index * 0.8) * 2;
-      token.sprite.y = clamp(
-        token.sprite.y + bob * ticker.deltaTime * 0.02,
-        TOKEN_SIZE / 2,
-        app.screen.height - TOKEN_SIZE / 2,
-      );
+    drawLegalTargets(targetLayer, boardLayout, dragState.legalTargets, hovered);
+    onDragStatusChange({
+      selectedCard: readableCardName(game, dragState.cardId),
+      target: hovered ? `L${hovered.level + 1} X${hovered.x}` : 'No target',
     });
   });
+  app.stage.on('pointerup', () => finishDrag());
+  app.stage.on('pointerupoutside', () => finishDrag());
 
-  drawStage(background, lanes, app.screen.width, app.screen.height);
-  layoutTokens(tokens, app.screen.width, app.screen.height);
+  app.ticker.add(() => {
+    if (lastScreenSize.width === app.screen.width && lastScreenSize.height === app.screen.height) {
+      return;
+    }
+
+    lastScreenSize.width = app.screen.width;
+    lastScreenSize.height = app.screen.height;
+    app.stage.hitArea = new Rectangle(0, 0, app.screen.width, app.screen.height);
+    renderScene();
+  });
+
+  renderScene();
 
   return app;
 
-  function endDrag() {
-    if (!activeToken) {
+  function renderScene() {
+    const width = app.screen.width;
+    const height = app.screen.height;
+    const boardLayout = createBoardLayout(width, height, game, legalMoves);
+
+    background.clear();
+    drawBackground(background, width, height);
+    targetLayer.removeChildren();
+    boardLayer.removeChildren();
+    handLayer.removeChildren();
+    drawBoard(boardLayer, boardLayout, game);
+    drawHand(handLayer, dragLayer, boardLayout, game, activePlayerId, legalMoves, (nextDragState) => {
+      dragState = nextDragState;
+      drawLegalTargets(targetLayer, boardLayout, dragState.legalTargets, null);
+      onDragStatusChange({
+        selectedCard: readableCardName(game, dragState.cardId),
+        target: 'Choose a highlighted slot',
+      });
+    });
+  }
+
+  function finishDrag() {
+    if (!dragState) {
       return;
     }
 
-    activeToken.sprite.alpha = 1;
-    activeToken.sprite.scale.set(0.76);
-    activeToken.sprite.cursor = 'grab';
-    activeToken = null;
+    const boardLayout = createBoardLayout(app.screen.width, app.screen.height, game, legalMoves);
+    const target = findNearestTarget(dragState.container.x, dragState.container.y, dragState.legalTargets, boardLayout);
+    const cardId = dragState.cardId;
+
+    dragState = null;
+    targetLayer.removeChildren();
+
+    if (target) {
+      onPlayCard(cardId, target);
+    } else {
+      renderScene();
+      onDragStatusChange({
+        selectedCard: readableCardName(game, cardId),
+        target: 'Returned to hand',
+      });
+    }
   }
 }
 
-function createPenguinTokens(texture: Texture, layer: Container): PenguinToken[] {
-  return TOKEN_COLORS.map((tint, index) => {
-    const sprite = new Sprite(texture);
-    sprite.anchor.set(0.5);
-    sprite.tint = tint;
-    sprite.width = TOKEN_SIZE;
-    sprite.height = TOKEN_SIZE;
-    sprite.scale.set(0.76);
-    sprite.eventMode = 'static';
-    sprite.cursor = 'grab';
-    sprite.label = `Penguin ${index + 1}`;
-
-    const token = {
-      id: `penguin-${index + 1}`,
-      label: `Penguin ${index + 1}`,
-      sprite,
-      home: { x: 0, y: 0 },
-    };
-
-    layer.addChild(sprite);
-
-    return token;
+function drawBackground(background: Graphics, width: number, height: number) {
+  background.rect(0, 0, width, height).fill(0xe8f4f3);
+  background.rect(0, height * 0.64, width, height * 0.36).fill(0xf4ead6);
+  background.roundRect(24, 24, width - 48, height * 0.58, 8).fill({ color: 0xffffff, alpha: 0.34 });
+  background.moveTo(32, height * 0.64).lineTo(width - 32, height * 0.64).stroke({
+    color: 0x17313a,
+    alpha: 0.16,
+    width: 2,
   });
 }
 
-function drawStage(background: Graphics, lanes: Graphics, width: number, height: number) {
-  background.clear();
-  background.rect(0, 0, width, height).fill(0xdff2f0);
-  background.rect(0, height * 0.62, width, height * 0.38).fill(0xf7f1de);
-  background.circle(width * 0.12, height * 0.18, 92).fill({ color: 0xffffff, alpha: 0.38 });
-  background.circle(width * 0.86, height * 0.24, 116).fill({ color: 0xffffff, alpha: 0.3 });
-  background.circle(width * 0.72, height * 0.76, 140).fill({ color: 0xe4564f, alpha: 0.1 });
+function drawBoard(layer: Container, layout: BoardLayout, game: GameSessionState) {
+  const round = game.currentRound;
 
-  lanes.clear();
-  const baseY = height * 0.64;
-  for (let i = 0; i < 4; i += 1) {
-    const y = baseY + i * 34;
-    lanes.moveTo(32, y).lineTo(width - 32, y).stroke({ color: 0x17313a, alpha: 0.12, width: 2 });
+  if (!round) {
+    return;
+  }
+
+  for (const key of round.board.occupiedCellKeys) {
+    const card = round.board.cardsByCell[key];
+    const cardLayout = getCardLayoutForTarget(layout, card);
+    const container = createCardContainer(
+      card.color,
+      CARD_COLOR_LABELS[card.color],
+      ownerInitial(game, card.ownerPlayerId),
+      cardLayout,
+      1,
+    );
+    layer.addChild(container);
   }
 }
 
-function layoutTokens(tokens: PenguinToken[], width: number, height: number) {
-  const columns = Math.min(tokens.length, Math.max(2, Math.floor(width / 132)));
-  const rows = Math.ceil(tokens.length / columns);
-  const gapX = Math.min(132, Math.max(98, width / (columns + 1)));
-  const gapY = rows > 1 ? 112 : 0;
-  const startY = Math.max(TOKEN_SIZE, height * 0.42 - ((rows - 1) * gapY) / 2);
+function drawLegalTargets(
+  layer: Container,
+  layout: BoardLayout,
+  targets: MoveTarget[],
+  hoveredTarget: MoveTarget | null,
+) {
+  layer.removeChildren();
 
-  tokens.forEach((token, index) => {
-    const col = index % columns;
-    const row = Math.floor(index / columns);
-    const x = gapX * (col + 1);
-    const y = startY + row * gapY;
+  for (const target of targets) {
+    const cardLayout = getCardLayoutForTarget(layout, target);
+    const isHovered = hoveredTarget ? sameTarget(target, hoveredTarget) : false;
+    const marker = new Graphics()
+      .roundRect(-cardLayout.width / 2, -cardLayout.height / 2, cardLayout.width, cardLayout.height, 8)
+      .fill({ color: isHovered ? 0xffffff : 0x17313a, alpha: isHovered ? 0.54 : 0.12 })
+      .stroke({ color: isHovered ? 0x17313a : 0xffffff, alpha: 0.72, width: isHovered ? 3 : 2 });
+    marker.position.set(cardLayout.centerX, cardLayout.centerY);
+    layer.addChild(marker);
+  }
+}
 
-    if (token.home.x === 0 && token.home.y === 0) {
-      token.sprite.position.set(x, y);
-    } else {
-      token.sprite.position.set(
-        clamp(token.sprite.x, TOKEN_SIZE / 2, width - TOKEN_SIZE / 2),
-        clamp(token.sprite.y, TOKEN_SIZE / 2, height - TOKEN_SIZE / 2),
+function drawHand(
+  handLayer: Container,
+  dragLayer: Container,
+  boardLayout: BoardLayout,
+  game: GameSessionState,
+  activePlayerId: PlayerId | null,
+  legalMoves: LegalMove[],
+  onStartDrag: (dragState: DragState) => void,
+) {
+  const round = game.currentRound;
+
+  if (!round || !activePlayerId || game.status !== 'round_active') {
+    drawCenteredLabel(handLayer, 'Round complete', boardLayout.originX, boardLayout.baseY + boardLayout.cardHeight * 2.2);
+    return;
+  }
+
+  const player = getCurrentRoundPlayer(game, activePlayerId);
+
+  if (!player) {
+    return;
+  }
+
+  if (player.handCardIds.length === 0) {
+    drawCenteredLabel(handLayer, 'No cards', boardLayout.originX, boardLayout.baseY + boardLayout.cardHeight * 2.2);
+    return;
+  }
+
+  const handY = boardLayout.baseY + boardLayout.cardHeight * 2.22;
+  const maxCards = player.handCardIds.length;
+  const spacing = Math.min(boardLayout.cardWidth + 10, (boardLayout.cardWidth * 8.8) / Math.max(1, maxCards - 1));
+  const totalWidth = spacing * (maxCards - 1);
+  const startX = boardLayout.originX - totalWidth / 2;
+
+  player.handCardIds.forEach((cardId, index) => {
+    const card = game.cardsById[cardId];
+    const cardLegalMoves = legalMoves.filter((move) => move.cardId === cardId);
+    const cardLayout: CardLayout = {
+      centerX: startX + spacing * index,
+      centerY: handY,
+      width: boardLayout.cardWidth,
+      height: boardLayout.cardHeight,
+    };
+    const container = createCardContainer(
+      card.color,
+      CARD_COLOR_LABELS[card.color],
+      `${card.serial}`,
+      cardLayout,
+      cardLegalMoves.length > 0 ? 1 : 0.42,
+    );
+
+    if (cardLegalMoves.length > 0) {
+      container.eventMode = 'static';
+      container.cursor = 'grab';
+      container.hitArea = new Rectangle(
+        -cardLayout.width / 2,
+        -cardLayout.height / 2,
+        cardLayout.width,
+        cardLayout.height,
       );
+      container.on('pointerdown', (event: FederatedPointerEvent) => {
+        dragLayer.addChild(container);
+        container.cursor = 'grabbing';
+        container.alpha = 0.9;
+        container.scale.set(1.06);
+        const pointer = dragLayer.toLocal(event.global);
+        onStartDrag({
+          cardId,
+          container,
+          legalTargets: cardLegalMoves.map((move) => move.target),
+          offsetX: container.x - pointer.x,
+          offsetY: container.y - pointer.y,
+        });
+      });
     }
 
-    token.home = { x, y };
+    handLayer.addChild(container);
   });
 }
 
-function publishDragStatus(onDragStatusChange: (status: DragStatus) => void, selectedToken: string, x: number, y: number) {
-  onDragStatusChange({
-    selectedToken,
-    position: `${Math.round(x)}, ${Math.round(y)}`,
+function createCardContainer(
+  color: CardColor,
+  label: string,
+  footer: string,
+  layout: CardLayout,
+  alpha: number,
+): Container {
+  const container = new Container();
+  const card = new Graphics()
+    .roundRect(-layout.width / 2, -layout.height / 2, layout.width, layout.height, 8)
+    .fill(COLOR_HEX[color])
+    .stroke({ color: 0x17313a, alpha: 0.22, width: 2 });
+  const shine = new Graphics()
+    .roundRect(-layout.width / 2 + 7, -layout.height / 2 + 7, layout.width - 14, layout.height * 0.28, 6)
+    .fill({ color: 0xffffff, alpha: 0.2 });
+  const text = new Text({
+    text: label,
+    resolution: 2,
+    style: {
+      fontFamily: 'Inter, system-ui, sans-serif',
+      fontSize: Math.max(10, Math.round(layout.width * 0.18)),
+      fontWeight: '800',
+      fill: COLOR_TEXT[color],
+      align: 'center',
+    },
+    anchor: 0.5,
   });
+  const footerText = new Text({
+    text: footer,
+    resolution: 2,
+    style: {
+      fontFamily: 'Inter, system-ui, sans-serif',
+      fontSize: Math.max(10, Math.round(layout.width * 0.17)),
+      fontWeight: '800',
+      fill: COLOR_TEXT[color],
+    },
+    anchor: 0.5,
+  });
+
+  text.y = -layout.height * 0.05;
+  footerText.y = layout.height * 0.31;
+  container.position.set(layout.centerX, layout.centerY);
+  container.alpha = alpha;
+  container.addChild(card, shine, text, footerText);
+
+  return container;
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
+function drawCenteredLabel(layer: Container, label: string, x: number, y: number) {
+  const text = new Text({
+    text: label,
+    resolution: 2,
+    style: {
+      fontFamily: 'Inter, system-ui, sans-serif',
+      fontSize: 18,
+      fontWeight: '800',
+      fill: 0x17313a,
+    },
+    anchor: 0.5,
+  });
+  text.position.set(x, y);
+  layer.addChild(text);
+}
+
+function createBoardLayout(width: number, height: number, game: GameSessionState, legalMoves: LegalMove[]): BoardLayout {
+  const availableWidth = Math.max(288, width - 60);
+  const cardWidth = Math.min(78, Math.max(42, availableWidth / 9.7));
+  const cardHeight = cardWidth * 1.28;
+  const board = game.currentRound?.board;
+  const xValues = [
+    ...(board?.occupiedCellKeys.map((key) => board.cardsByCell[key].x) ?? []),
+    ...legalMoves.map((move) => move.target.x),
+    0,
+  ];
+  const minX = Math.min(...xValues);
+  const maxX = Math.max(...xValues);
+  const columns = Math.max(1, maxX - minX + 1);
+  const gapX = Math.min(cardWidth + 10, availableWidth / Math.max(1, columns));
+  const originX = width / 2 - ((minX + maxX) / 2) * gapX;
+  const baseY = Math.min(height * 0.55, height - cardHeight * 2.95);
+
+  return {
+    cardWidth,
+    cardHeight,
+    gapX,
+    rowRise: cardHeight * 0.8,
+    originX,
+    baseY,
+  };
+}
+
+function getCardLayoutForTarget(layout: BoardLayout, target: MoveTarget): CardLayout {
+  return {
+    centerX: layout.originX + target.x * layout.gapX,
+    centerY: layout.baseY - target.level * layout.rowRise,
+    width: layout.cardWidth,
+    height: layout.cardHeight,
+  };
+}
+
+function findNearestTarget(
+  x: number,
+  y: number,
+  targets: MoveTarget[],
+  layout: BoardLayout,
+): MoveTarget | null {
+  let best: { target: MoveTarget; distance: number } | null = null;
+
+  for (const target of targets) {
+    const targetLayout = getCardLayoutForTarget(layout, target);
+    const distance = Math.hypot(targetLayout.centerX - x, targetLayout.centerY - y);
+
+    if (!best || distance < best.distance) {
+      best = { target, distance };
+    }
+  }
+
+  const threshold = Math.max(layout.cardWidth * 0.82, 40);
+  return best && best.distance <= threshold ? best.target : null;
+}
+
+function readableCardName(game: GameSessionState, cardId: CardId): string {
+  const card = game.cardsById[cardId];
+  return card ? `${CARD_COLOR_LABELS[card.color]} ${card.serial}` : cardId;
+}
+
+function ownerInitial(game: GameSessionState, playerId: PlayerId): string {
+  if (playerId === 'initial-board') {
+    return 'B';
+  }
+
+  const player = game.players.find((candidate) => candidate.playerId === playerId);
+  return player?.displayName.slice(0, 1).toUpperCase() ?? '?';
+}
+
+function serializeLegalMoves(legalMoves: LegalMove[]): string {
+  return legalMoves.map((move) => `${move.cardId}:${move.target.level}:${move.target.x}`).join('|');
 }
