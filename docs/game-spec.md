@@ -26,9 +26,11 @@
 ### 設計方針
 
 - ゲームルールの正状態は、UI とは切り離した純粋データとして持つ
-- マルチプレイではサーバーを authoritative にする
+- マルチプレイでは現在のゲームホストを authoritative にする
+- ローカル Node.js サーバーは room/lobby/signaling のみを担当し、ゲームルールの正状態は持たない
 - UI 用の選択状態やアニメーション状態は、ゲーム状態とは別に持つ
-- 他人の手札はネットワーク上でも公開しない
+- UI では他人の手札を公開しない
+- ホスト交代に備えた P2P 複製状態の扱いは `docs/network-spec.md` を優先する
 - 小さいゲームなので、差分同期にこだわりすぎず「イベント + スナップショット」で十分
 
 ## 2. 状態の大分類
@@ -42,7 +44,7 @@
 どの画面を表示しているか、何を選択中か、どのアニメーションを流しているか。
 
 3. `Network State`
-接続状況、再接続トークン、未送信コマンド、サーバー時刻との差など。
+接続状況、再接続トークン、未送信コマンド、現在ホスト、host epoch、heartbeat、host migration 状態など。
 
 4. `Persistence / Replay State`
 セーブ、再接続、観戦、リプレイのためのイベントログやスナップショット。
@@ -345,13 +347,16 @@ UI 状態には、選択中カード、ハイライト中の置き場所、モ�
 
 基本方針:
 
-- クライアントは「意図」を送る
-- サーバーは「検証済み結果」を返す
-- 他プレイヤーの手札は送らない
-- 小規模ゲームなので、アクション確定後にスナップショットを返す方式で十分
+- 非ホスト peer は「意図」を current host に送る
+- current host は「検証済み結果」を全 peer に broadcast する
+- host 自身の入力も同じ command validation path に通す
+- ローカル Node.js サーバーは signaling/lobby 専用で、ゲームコマンドを検証しない
+- UI では他プレイヤーの手札を見せず、`remainingCardCount` だけを表示する
+- ホスト交代に必要な完全複製状態の扱いは `docs/network-spec.md` を優先する
+- 小規模ゲームなので、アクション確定後にイベントとスナップショットを送る方式で十分
 
 ```ts
-type ClientCommand =
+type PeerCommand =
   | {
       type: 'join_lobby';
       gameId: GameId;
@@ -370,7 +375,7 @@ type ClientCommand =
   | { type: 'leave_game' }
   | { type: 'ping'; clientTime: number };
 
-type ServerMessage =
+type HostMessage =
   | { type: 'snapshot'; state: ClientGameView }
   | { type: 'command_rejected'; actionId?: string; reason: string }
   | { type: 'player_presence_changed'; playerId: PlayerId; status: ConnectionStatus }
@@ -410,21 +415,27 @@ interface PrivatePlayerView {
 }
 ```
 
-マルチプレイ時に送るべきでないものは、他プレイヤーの `handCardIds`、他プレイヤーのカード色一覧、サーバー側の乱数シード全体、検証前の仮置き結果です。
+UI 表示用の `ClientGameView` に含めるべきでないものは、他プレイヤーの `handCardIds`、他プレイヤーのカード色一覧、乱数シード全体、検証前の仮置き結果です。
+ただし、ホスト切断後にゲームを継続するための P2P 複製状態では、`docs/network-spec.md` に従って完全なゲーム情報を各 peer が保持する場合があります。
+その場合でも、UI はローカルプレイヤー以外の手札を表示してはいけません。
 
-## 11. サーバー内部で持っておくと便利なもの
+## 11. ホスト権威 peer が持っておくと便利なもの
 
-クライアントには見せないが、サーバー内部では持っていた方がよいデータです。
+通常 UI には見せないが、current host の command validation と host migration のために持っていた方がよいデータです。
 
 ```ts
-interface ServerOnlyState {
+interface HostAuthorityState {
+  hostPeerId: string;
+  hostEpoch: number;
   reconnectSecrets: Record<PlayerId, string>;
   lastCommandIdsByPlayer: Record<PlayerId, string | null>;
   eventLog: GameEvent[];
+  lastCommittedRevision: number;
+  lastCommittedStateHash: string;
 }
 ```
 
-`eventLog` があると、リプレイ、バグ調査、再接続時の差分配信、将来の観戦機能に流用できます。
+`eventLog` があると、リプレイ、バグ調査、再接続時の差分配信、host migration、将来の観戦機能に流用できます。
 
 ## 12. まとめ用データ
 
@@ -506,7 +517,8 @@ function applyRoundSummary(game: GameSessionState, summary: RoundSummary): GameS
 - 盤面は `Record<CellKey, BoardCardState>` で持つ
 - UI は `selectedCardId` と `highlightedTargets` を分離する
 - 他人の手札は `remainingCardCount` だけ見せる
-- サーバーは `play_card` だけを受け取って合法性を検証する
+- current host は `play_card` command を受け取って合法性を検証する
+- ローカル Node.js サーバーは `play_card` を検証せず、room/lobby/signaling のみに使う
 - ラウンド終了後は `RoundSummary` に圧縮し、現在ラウンドの詳細は破棄可能にする
 - 乱数は `randomSeed` を持ち、配札を再現できるようにする
 
