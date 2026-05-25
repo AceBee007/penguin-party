@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PixiDragStage, type StageDragStatus } from './PixiDragStage';
 import {
   CARD_COLOR_LABELS,
+  buildStateHash,
   createLocalGame,
   getActivePlayer,
   getCurrentRoundPlayer,
@@ -9,11 +10,13 @@ import {
   getLegalMovesForPlayer,
   playCard,
 } from '../game/rules';
-import type { CardId, GameSessionState, MoveTarget, PlayerId } from '../game/types';
+import type { CardId, GameSessionState, MoveTarget, PlayerId, RoundPlayerState } from '../game/types';
+import { electNextHostPeerId } from '../network/hostElection';
 import { PeerMeshClient } from '../network/peerMesh';
 import { createRoom, joinRoom, markRoomPlaying } from '../network/signalingClient';
 import type {
   EventCommitted,
+  Heartbeat,
   HostHello,
   NetworkIdentity,
   P2PEnvelope,
@@ -35,14 +38,18 @@ export function MultiplayerGame() {
   const [dragStatus, setDragStatus] = useState<StageDragStatus>(INITIAL_DRAG_STATUS);
   const [roomName, setRoomName] = useState('Penguin Table');
   const [displayName, setDisplayName] = useState('Peer A');
+  const [createPassword, setCreatePassword] = useState('');
   const [joinCode, setJoinCode] = useState('');
   const [joinName, setJoinName] = useState('Peer B');
+  const [joinPassword, setJoinPassword] = useState('');
   const [message, setMessage] = useState('Create or join a local P2P room.');
   const [networkStatus, setNetworkStatus] = useState('idle');
+  const [hostPeerId, setHostPeerId] = useState<string | null>(null);
   const meshRef = useRef<PeerMeshClient | null>(null);
   const identityRef = useRef<NetworkIdentity | null>(null);
   const gameRef = useRef<GameSessionState | null>(null);
   const peersRef = useRef<PeerRuntimeView[]>([]);
+  const hostPeerIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
 
   useEffect(() => {
@@ -57,16 +64,50 @@ export function MultiplayerGame() {
     peersRef.current = peers;
   }, [peers]);
 
+  useEffect(() => {
+    hostPeerIdRef.current = hostPeerId;
+  }, [hostPeerId]);
+
+  useEffect(() => {
+    window.__PENGUIN_DEBUG__ = {
+      game,
+      hostPeerId,
+      identity,
+      peers,
+    };
+  }, [game, hostPeerId, identity, peers]);
+
   useEffect(
     () => () => {
       meshRef.current?.close();
+      delete window.__PENGUIN_DEBUG__;
     },
     [],
   );
 
+  useEffect(() => {
+    if (!identity || identity.peerId !== hostPeerId || !game) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      const currentGame = gameRef.current;
+
+      if (!currentGame) {
+        return;
+      }
+
+      sendHostHeartbeat(identity, currentGame);
+    }, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [game, hostPeerId, identity]);
+
   const activePlayer = game ? getActivePlayer(game) : null;
   const localPlayerId = identity?.playerId ?? null;
-  const isLocalTurn = Boolean(game && localPlayerId && activePlayer?.playerId === localPlayerId);
+  const isHost = Boolean(identity && hostPeerId === identity.peerId);
+  const isSpectator = identity?.role === 'spectator';
+  const isLocalTurn = Boolean(game && localPlayerId && activePlayer?.playerId === localPlayerId && !isSpectator);
   const legalMoves = useMemo(
     () => (game && localPlayerId && isLocalTurn ? getLegalMovesForPlayer(game, localPlayerId) : []),
     [game, isLocalTurn, localPlayerId],
@@ -74,12 +115,16 @@ export function MultiplayerGame() {
   const activeRoundPlayer = game && localPlayerId ? getCurrentRoundPlayer(game, localPlayerId) : null;
   const standings = game ? getFinalStandings(game) : [];
   const connectedPeerCount = peers.filter((peer) => peer.connectionStatus === 'connected').length;
+  const playerCount = peers.filter((peer) => peer.role !== 'spectator').length;
+  const spectatorCount = peers.filter((peer) => peer.role === 'spectator').length;
+  const canStartGame = Boolean(isHost && !game && playerCount >= 2);
 
   const startMesh = useCallback((nextIdentity: NetworkIdentity) => {
     meshRef.current?.close();
+    const nextHostPeerId = nextIdentity.room.hostPeerId;
     const mesh = new PeerMeshClient({
       identity: nextIdentity,
-      hostPeerId: nextIdentity.room.hostPeerId,
+      hostPeerId: nextHostPeerId,
       onPeersChanged: (nextPeers) => {
         setPeers(nextPeers);
       },
@@ -87,10 +132,12 @@ export function MultiplayerGame() {
       onChannelOpen: (peer) => {
         setMessage(`DataChannel open with ${peer.displayName}.`);
 
-        if (nextIdentity.role === 'host') {
-          const snapshot = ensureHostGame(nextIdentity, peer);
-          sendHostHello(nextIdentity, peer, snapshot);
+        if (nextIdentity.peerId === hostPeerIdRef.current && gameRef.current) {
+          sendHostHello(nextIdentity, peer, gameRef.current);
         }
+      },
+      onPeerLeft: (peerId) => {
+        handlePeerLeft(peerId);
       },
       onStatus: (status) => {
         setNetworkStatus(status);
@@ -99,14 +146,10 @@ export function MultiplayerGame() {
 
     meshRef.current = mesh;
     setIdentity(nextIdentity);
+    setHostPeerId(nextHostPeerId);
+    hostPeerIdRef.current = nextHostPeerId;
     setPeers([
-      {
-        peerId: nextIdentity.peerId,
-        playerId: nextIdentity.playerId,
-        displayName: nextIdentity.displayName,
-        role: nextIdentity.role,
-        connectionStatus: 'signaling',
-      },
+      toPeerRuntime(nextIdentity, 'signaling'),
       ...nextIdentity.existingPeers.map((peer) => ({
         peerId: peer.peerId,
         playerId: peer.playerId,
@@ -120,58 +163,91 @@ export function MultiplayerGame() {
 
   const handleCreateRoom = useCallback(async () => {
     try {
+      const password = createPassword.trim();
       const nextIdentity = await createRoom({
         roomName,
         hostDisplayName: displayName,
-        visibility: 'public',
+        visibility: password ? 'private' : 'public',
+        password: password || undefined,
         maxPlayers: 6,
       });
-      setMessage(`Room ${nextIdentity.room.roomId} created. Waiting for Peer B.`);
+      setMessage(`Room ${nextIdentity.room.roomId} created. Waiting for players.`);
       startMesh(nextIdentity);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Room creation failed.');
     }
-  }, [displayName, roomName, startMesh]);
+  }, [createPassword, displayName, roomName, startMesh]);
 
   const handleJoinRoom = useCallback(async () => {
     try {
       const nextIdentity = await joinRoom(joinCode.trim().toUpperCase(), {
         displayName: joinName,
+        password: joinPassword.trim() || undefined,
       });
-      setMessage(`Joined room ${nextIdentity.room.roomId}. Waiting for host snapshot.`);
+      setMessage(`Joined room ${nextIdentity.room.roomId}.`);
       startMesh(nextIdentity);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Join failed.');
     }
-  }, [joinCode, joinName, startMesh]);
+  }, [joinCode, joinName, joinPassword, startMesh]);
 
-  const handlePlayCard = useCallback(
-    (cardId: CardId, target: MoveTarget) => {
-      const currentIdentity = identityRef.current;
-      const currentGame = gameRef.current;
+  const handleStartGame = useCallback(() => {
+    const currentIdentity = identityRef.current;
 
-      if (!currentIdentity || !currentGame || !currentIdentity.playerId) {
-        return;
+    if (!currentIdentity || currentIdentity.peerId !== hostPeerIdRef.current) {
+      return;
+    }
+
+    const playerPeers = getPlayerPeers(currentIdentity, peersRef.current);
+    const snapshot = createLocalGame({
+      playerCount: playerPeers.length,
+      playerNames: playerPeers.map((peer) => peer.displayName),
+      seed: `room-${currentIdentity.room.roomId}`,
+    });
+
+    eventSeqRef.current = 0;
+    gameRef.current = snapshot;
+    setGame(snapshot);
+    void markRoomPlaying(currentIdentity.room.roomId);
+    setMessage(`Started ${playerPeers.length}-player game.`);
+
+    for (const peer of peersRef.current) {
+      if (peer.peerId !== currentIdentity.peerId) {
+        sendHostHello(currentIdentity, peer, snapshot);
       }
+    }
+  }, []);
 
-      if (currentIdentity.role === 'host') {
-        commitHostMove(currentIdentity.playerId, cardId, target, null);
-        return;
-      }
+  const handlePlayCard = useCallback((cardId: CardId, target: MoveTarget) => {
+    const currentIdentity = identityRef.current;
+    const currentGame = gameRef.current;
+    const currentHostPeerId = hostPeerIdRef.current;
 
-      const command: PlayerCommand = {
-        type: 'player_command',
-        commandId: createCommandId(),
-        playerId: currentIdentity.playerId,
-        command: { type: 'play_card', cardId, target },
-        clientRevision: currentGame.revision,
-        clientSentAt: Date.now(),
-      };
-      meshRef.current?.sendPayload(currentIdentity.room.hostPeerId, command);
-      setMessage('Sent play_card command to host.');
-    },
-    [],
-  );
+    if (!currentIdentity || !currentGame || !currentIdentity.playerId || currentIdentity.role === 'spectator') {
+      return;
+    }
+
+    if (currentIdentity.peerId === currentHostPeerId) {
+      commitHostMove(currentIdentity.playerId, cardId, target, null);
+      return;
+    }
+
+    if (!currentHostPeerId) {
+      setMessage('No current host is available.');
+      return;
+    }
+
+    const command: PlayerCommand = {
+      type: 'player_command',
+      commandId: createCommandId(),
+      playerId: currentIdentity.playerId,
+      command: { type: 'play_card', cardId, target },
+      clientRevision: currentGame.revision,
+      clientSentAt: Date.now(),
+    };
+    meshRef.current?.sendPayload(currentHostPeerId, command);
+    setMessage('Sent play_card command to host.');
+  }, []);
 
   return (
     <main className="app-shell">
@@ -180,7 +256,7 @@ export function MultiplayerGame() {
           <span className="brand__mark" aria-hidden="true" />
           <div className="brand__copy">
             <h1 className="brand__title">Penguin Party</h1>
-            <span className="brand__mode">Two-peer P2P mode</span>
+            <span className="brand__mode">P2P party room</span>
           </div>
         </div>
         <div className="connection-indicator" aria-label={`P2P status ${networkStatus}`}>
@@ -199,7 +275,21 @@ export function MultiplayerGame() {
             </label>
             <label>
               Display name
-              <input value={displayName} maxLength={16} onChange={(event) => setDisplayName(event.target.value)} />
+              <input
+                data-create-name
+                value={displayName}
+                maxLength={16}
+                onChange={(event) => setDisplayName(event.target.value)}
+              />
+            </label>
+            <label>
+              Password
+              <input
+                data-create-password
+                value={createPassword}
+                maxLength={20}
+                onChange={(event) => setCreatePassword(event.target.value)}
+              />
             </label>
             <button type="button" onClick={handleCreateRoom}>
               Create room
@@ -219,7 +309,21 @@ export function MultiplayerGame() {
             </label>
             <label>
               Display name
-              <input value={joinName} maxLength={16} onChange={(event) => setJoinName(event.target.value)} />
+              <input
+                data-join-name
+                value={joinName}
+                maxLength={16}
+                onChange={(event) => setJoinName(event.target.value)}
+              />
+            </label>
+            <label>
+              Password
+              <input
+                data-join-password
+                value={joinPassword}
+                maxLength={20}
+                onChange={(event) => setJoinPassword(event.target.value)}
+              />
             </label>
             <button type="button" onClick={handleJoinRoom}>
               Join room
@@ -260,6 +364,10 @@ export function MultiplayerGame() {
                 <strong data-local-player>{identity.displayName}</strong>
               </div>
               <div>
+                <span>Role</span>
+                <strong data-local-role>{identity.role}</strong>
+              </div>
+              <div>
                 <span>Card</span>
                 <strong data-selected-card>{dragStatus.selectedCard}</strong>
               </div>
@@ -282,7 +390,7 @@ export function MultiplayerGame() {
                 />
               ) : (
                 <div className="waiting-canvas" data-waiting-for-snapshot>
-                  Waiting for host snapshot
+                  Waiting for host start
                 </div>
               )}
             </div>
@@ -290,6 +398,11 @@ export function MultiplayerGame() {
             <div className="action-bar">
               <p data-game-message>{message}</p>
               <div className="action-bar__buttons">
+                {canStartGame ? (
+                  <button data-start-game type="button" onClick={handleStartGame}>
+                    Start game
+                  </button>
+                ) : null}
                 <button type="button" onClick={() => window.location.assign('/?mode=multiplayer')}>
                   Leave
                 </button>
@@ -299,6 +412,18 @@ export function MultiplayerGame() {
 
           <aside className="round-panel" aria-label="P2P details">
             <div className="metric-grid">
+              <div>
+                <span>Players</span>
+                <strong data-player-count>{playerCount}</strong>
+              </div>
+              <div>
+                <span>Connected</span>
+                <strong data-connected-count>{connectedPeerCount}</strong>
+              </div>
+              <div>
+                <span>Spectators</span>
+                <strong data-spectator-count>{spectatorCount}</strong>
+              </div>
               <div>
                 <span>Board</span>
                 <strong data-board-count>{game?.currentRound?.board.occupiedCellKeys.length ?? 0}</strong>
@@ -314,6 +439,10 @@ export function MultiplayerGame() {
               <div>
                 <span>Revision</span>
                 <strong data-revision>{game?.revision ?? 0}</strong>
+              </div>
+              <div>
+                <span>Host</span>
+                <strong data-host-peer>{hostPeerId ?? 'none'}</strong>
               </div>
             </div>
 
@@ -338,6 +467,9 @@ export function MultiplayerGame() {
     const payload = envelope.payload;
 
     if (payload.type === 'host_hello') {
+      setHostPeerId(payload.currentHostPeerId);
+      hostPeerIdRef.current = payload.currentHostPeerId;
+      meshRef.current?.setHostPeerId(payload.currentHostPeerId);
       gameRef.current = payload.snapshot;
       setGame(payload.snapshot);
       setMessage('Received host snapshot.');
@@ -350,9 +482,8 @@ export function MultiplayerGame() {
       return;
     }
 
-    if (payload.type === 'player_command') {
-      const sourcePeerId = envelope.fromPeerId;
-      commitHostMove(payload.playerId, payload.command.cardId, payload.command.target, sourcePeerId, payload.commandId);
+    if (payload.type === 'player_command' && identityRef.current?.peerId === hostPeerIdRef.current) {
+      commitHostMove(payload.playerId, payload.command.cardId, payload.command.target, envelope.fromPeerId, payload.commandId);
       return;
     }
 
@@ -364,43 +495,116 @@ export function MultiplayerGame() {
       return;
     }
 
+    if (payload.type === 'heartbeat') {
+      setHostPeerId(payload.hostPeerId);
+      hostPeerIdRef.current = payload.hostPeerId;
+      meshRef.current?.setHostPeerId(payload.hostPeerId);
+
+      if (
+        payload.snapshot &&
+        (!gameRef.current ||
+          payload.revision > gameRef.current.revision ||
+          (payload.revision === gameRef.current.revision && payload.stateHash !== gameRef.current.stateHash))
+      ) {
+        gameRef.current = payload.snapshot;
+        setGame(payload.snapshot);
+        setDragStatus(INITIAL_DRAG_STATUS);
+      }
+
+      setNetworkStatus(`host rev ${payload.revision}`);
+      return;
+    }
+
     if (payload.type === 'command_rejected') {
       setMessage(`Command rejected: ${payload.reason}`);
     }
   }
 
-  function ensureHostGame(currentIdentity: NetworkIdentity, peer: PeerSummary): GameSessionState {
-    if (gameRef.current) {
-      return gameRef.current;
+  function handlePeerLeft(peerId: string): void {
+    if (peerId !== hostPeerIdRef.current) {
+      return;
     }
 
-    const playerPeers = [
-      {
-        playerId: currentIdentity.playerId,
-        displayName: currentIdentity.displayName,
-      },
-      {
-        playerId: peer.playerId,
-        displayName: peer.displayName,
-      },
-    ]
-      .filter((candidate): candidate is { playerId: PlayerId; displayName: string } => Boolean(candidate.playerId))
-      .sort((left, right) => numericPlayerIndex(left.playerId) - numericPlayerIndex(right.playerId));
-    const snapshot = createLocalGame({
-      playerCount: playerPeers.length,
-      playerNames: playerPeers.map((player) => player.displayName),
-      seed: `room-${currentIdentity.room.roomId}`,
+    const currentIdentity = identityRef.current;
+    const currentGame = gameRef.current;
+    const leftPeer = peersRef.current.find((peer) => peer.peerId === peerId);
+
+    if (!currentIdentity || !currentGame) {
+      return;
+    }
+
+    const candidates = [toPeerRuntime(currentIdentity, 'connected'), ...peersRef.current]
+      .filter((peer) => peer.peerId !== peerId)
+      .filter((peer, index, all) => all.findIndex((candidate) => candidate.peerId === peer.peerId) === index)
+      .map((peer) => ({ ...peer, connectionStatus: peer.connectionStatus === 'signaling' ? 'connected' : peer.connectionStatus }));
+    const nextHostPeerId = electNextHostPeerId({
+      previousHostPeerId: peerId,
+      peers: candidates,
+      revision: currentGame.revision,
+      stateHash: currentGame.stateHash,
     });
 
-    gameRef.current = snapshot;
-    setGame(snapshot);
-    void markRoomPlaying(currentIdentity.room.roomId);
-    setMessage('Game snapshot created by host.');
-    return snapshot;
+    if (!nextHostPeerId) {
+      setMessage('Host disconnected; no replacement host was available.');
+      return;
+    }
+
+    setHostPeerId(nextHostPeerId);
+    hostPeerIdRef.current = nextHostPeerId;
+    meshRef.current?.setHostPeerId(nextHostPeerId);
+
+    const nextHostPlayerId = candidates.find((peer) => peer.peerId === nextHostPeerId)?.playerId;
+
+    let nextGame = currentGame;
+
+    if (leftPeer?.playerId && nextHostPlayerId && currentGame.currentRound?.activePlayerId === leftPeer.playerId) {
+      const reassigned = reassignActivePlayer(currentGame, nextHostPlayerId);
+      nextGame = reassigned;
+      gameRef.current = nextGame;
+      setGame(nextGame);
+    }
+
+    if (currentIdentity.peerId === nextHostPeerId) {
+      const promotedIdentity: NetworkIdentity = {
+        ...currentIdentity,
+        role: 'host',
+        room: { ...currentIdentity.room, hostPeerId: nextHostPeerId },
+      };
+      identityRef.current = promotedIdentity;
+      setIdentity(promotedIdentity);
+      setMessage('Host disconnected; this peer is the new host.');
+
+      for (const peer of candidates) {
+        if (peer.peerId !== promotedIdentity.peerId) {
+          sendHostHello(promotedIdentity, peer, nextGame);
+        }
+      }
+    } else {
+      setMessage('Host disconnected; elected a replacement host.');
+    }
   }
 
-  function sendHostHello(currentIdentity: NetworkIdentity, peer: PeerSummary, snapshot: GameSessionState): void {
-    const allPeers = [toPeerRuntime(currentIdentity), ...peersRef.current].filter(
+  function sendHostHeartbeat(currentIdentity: NetworkIdentity, snapshot: GameSessionState): void {
+    for (const peer of peersRef.current) {
+      if (peer.peerId === currentIdentity.peerId) {
+        continue;
+      }
+
+      const heartbeat: Heartbeat = {
+        type: 'heartbeat',
+        hostPeerId: currentIdentity.peerId,
+        hostEpoch: 1,
+        revision: snapshot.revision,
+        eventSeq: eventSeqRef.current,
+        stateHash: snapshot.stateHash,
+        snapshot: peer.role === 'spectator' ? redactGameForSpectator(snapshot) : snapshot,
+      };
+      meshRef.current?.sendPayload(peer.peerId, heartbeat);
+    }
+  }
+
+  function sendHostHello(currentIdentity: NetworkIdentity, peer: PeerSummary | PeerRuntimeView, snapshot: GameSessionState): void {
+    const allPeers = [toPeerRuntime(currentIdentity, 'connected'), ...peersRef.current].filter(
       (candidate, index, candidates) => candidates.findIndex((item) => item.peerId === candidate.peerId) === index,
     );
     const payload: HostHello = {
@@ -409,7 +613,7 @@ export function MultiplayerGame() {
       hostEpoch: 1,
       playerIdByPeerId: Object.fromEntries(allPeers.map((item) => [item.peerId, item.playerId])),
       roleByPeerId: Object.fromEntries(allPeers.map((item) => [item.peerId, item.role])),
-      snapshot,
+      snapshot: peer.role === 'spectator' ? redactGameForSpectator(snapshot) : snapshot,
     };
 
     meshRef.current?.sendPayload(peer.peerId, payload);
@@ -417,8 +621,9 @@ export function MultiplayerGame() {
 
   function sendPeerReady(snapshot: GameSessionState): void {
     const currentIdentity = identityRef.current;
+    const currentHostPeerId = hostPeerIdRef.current;
 
-    if (!currentIdentity) {
+    if (!currentIdentity || !currentHostPeerId) {
       return;
     }
 
@@ -431,7 +636,7 @@ export function MultiplayerGame() {
       stateHash: snapshot.stateHash,
     };
 
-    meshRef.current?.sendPayload(currentIdentity.room.hostPeerId, payload);
+    meshRef.current?.sendPayload(currentHostPeerId, payload);
   }
 
   function commitHostMove(
@@ -444,7 +649,7 @@ export function MultiplayerGame() {
     const currentIdentity = identityRef.current;
     const currentGame = gameRef.current;
 
-    if (!currentIdentity || currentIdentity.role !== 'host' || !currentGame) {
+    if (!currentIdentity || currentIdentity.peerId !== hostPeerIdRef.current || !currentGame) {
       return;
     }
 
@@ -457,15 +662,21 @@ export function MultiplayerGame() {
       setDragStatus(INITIAL_DRAG_STATUS);
       setMessage(`${currentGame.players.find((player) => player.playerId === playerId)?.displayName} played ${CARD_COLOR_LABELS[currentGame.cardsById[cardId].color]}.`);
 
-      const payload: EventCommitted = {
-        type: 'event_committed',
-        event: result.event,
-        eventSeq: eventSeqRef.current,
-        revision: nextGame.revision,
-        stateHash: nextGame.stateHash,
-        snapshot: nextGame,
-      };
-      meshRef.current?.broadcastPayload(payload);
+      for (const peer of peersRef.current) {
+        if (peer.peerId === currentIdentity.peerId) {
+          continue;
+        }
+
+        const payload: EventCommitted = {
+          type: 'event_committed',
+          event: result.event,
+          eventSeq: eventSeqRef.current,
+          revision: nextGame.revision,
+          stateHash: nextGame.stateHash,
+          snapshot: peer.role === 'spectator' ? redactGameForSpectator(nextGame) : nextGame,
+        };
+        meshRef.current?.sendPayload(peer.peerId, payload);
+      }
     } catch {
       if (sourcePeerId) {
         meshRef.current?.sendPayload(sourcePeerId, {
@@ -479,13 +690,80 @@ export function MultiplayerGame() {
   }
 }
 
-function toPeerRuntime(identity: NetworkIdentity): PeerRuntimeView {
+function reassignActivePlayer(game: GameSessionState, activePlayerId: PlayerId): GameSessionState {
+  if (!game.currentRound) {
+    return game;
+  }
+
+  const nextGame = {
+    ...game,
+    currentRound: {
+      ...game.currentRound,
+      activePlayerId,
+    },
+    revision: game.revision + 1,
+  };
+
+  return {
+    ...nextGame,
+    stateHash: buildStateHash(nextGame),
+  };
+}
+
+function getPlayerPeers(identity: NetworkIdentity, peers: PeerRuntimeView[]): PeerRuntimeView[] {
+  return [toPeerRuntime(identity, 'connected'), ...peers]
+    .filter((peer) => peer.role !== 'spectator')
+    .filter((peer): peer is PeerRuntimeView & { playerId: PlayerId } => peer.playerId !== null)
+    .filter((peer, index, all) => all.findIndex((candidate) => candidate.peerId === peer.peerId) === index)
+    .sort((left, right) => numericPlayerIndex(left.playerId) - numericPlayerIndex(right.playerId));
+}
+
+function redactGameForSpectator(game: GameSessionState): GameSessionState {
+  const currentRound = game.currentRound
+    ? {
+        ...game.currentRound,
+        deck: {
+          shuffledCardIds: [],
+          dealtCardIdsByPlayer: {},
+          initialBoardCardIds: [],
+        },
+        players: Object.fromEntries(
+          Object.entries(game.currentRound.players).map(([playerId, player]) => [
+            playerId,
+            redactRoundPlayer(player),
+          ]),
+        ),
+      }
+    : null;
+  const redacted = {
+    ...game,
+    randomSeed: 'redacted',
+    currentRound,
+    eventLog: [],
+  };
+
+  return {
+    ...redacted,
+    stateHash: game.stateHash || buildStateHash(redacted),
+  };
+}
+
+function redactRoundPlayer(player: RoundPlayerState): RoundPlayerState {
+  return {
+    ...player,
+    handCardIds: [],
+    playedCardIds: [],
+    remainingCardCount: player.remainingCardCount,
+  };
+}
+
+function toPeerRuntime(identity: NetworkIdentity, connectionStatus: PeerRuntimeView['connectionStatus']): PeerRuntimeView {
   return {
     peerId: identity.peerId,
     playerId: identity.playerId,
     displayName: identity.displayName,
     role: identity.role,
-    connectionStatus: 'connected',
+    connectionStatus,
   };
 }
 

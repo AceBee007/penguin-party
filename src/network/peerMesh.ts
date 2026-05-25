@@ -24,6 +24,7 @@ interface PeerConnectionRecord {
   channel: RTCDataChannel | null;
   status: PeerConnectionStatus;
   offered: boolean;
+  createdAt: number;
 }
 
 interface PeerMeshOptions {
@@ -32,17 +33,22 @@ interface PeerMeshOptions {
   onPeersChanged: (peers: PeerRuntimeView[]) => void;
   onPayload: (envelope: P2PEnvelope) => void;
   onChannelOpen: (peer: PeerSummary) => void;
+  onPeerLeft?: (peerId: string) => void;
   onStatus: (status: string) => void;
 }
 
 export class PeerMeshClient {
   private readonly peers = new Map<string, PeerSummary>();
   private readonly connections = new Map<string, PeerConnectionRecord>();
+  private readonly pendingIceCandidates = new Map<string, RTCIceCandidateInit[]>();
   private readonly signaling: SignalingClient;
+  private currentHostPeerId: string;
   private hostEpoch = 1;
+  private retryIntervalId: number | null = null;
 
   constructor(private readonly options: PeerMeshOptions) {
     this.peers.set(options.identity.peerId, toLocalSummary(options.identity));
+    this.currentHostPeerId = options.hostPeerId;
     this.signaling = new SignalingClient(
       options.identity,
       (message) => this.handleSignalingMessage(message),
@@ -52,6 +58,9 @@ export class PeerMeshClient {
 
   connect(): void {
     this.signaling.connect();
+    this.retryIntervalId = window.setInterval(() => {
+      void this.retryStaleOffererConnections();
+    }, 2500);
   }
 
   close(): void {
@@ -61,12 +70,21 @@ export class PeerMeshClient {
     }
 
     this.signaling.close();
+    if (this.retryIntervalId !== null) {
+      window.clearInterval(this.retryIntervalId);
+      this.retryIntervalId = null;
+    }
     this.connections.clear();
     this.publishPeers();
   }
 
   getConnectedPeerCount(): number {
     return [...this.connections.values()].filter((record) => record.channel?.readyState === 'open').length;
+  }
+
+  setHostPeerId(peerId: string): void {
+    this.currentHostPeerId = peerId;
+    this.hostEpoch += 1;
   }
 
   sendPayload(toPeerId: string, payload: P2PGamePayload): void {
@@ -81,7 +99,7 @@ export class PeerMeshClient {
       roomId: this.options.identity.room.roomId,
       fromPeerId: this.options.identity.peerId,
       toPeerId,
-      hostPeerId: this.options.hostPeerId,
+      hostPeerId: this.currentHostPeerId,
       hostEpoch: this.hostEpoch,
       messageId: createMessageId(),
       sentAt: Date.now(),
@@ -102,7 +120,7 @@ export class PeerMeshClient {
       for (const peer of message.peers) {
         this.peers.set(peer.peerId, peer);
 
-        if (shouldCreateOffer(toLocalSummary(this.options.identity), peer)) {
+        if (shouldConnectPeers(toLocalSummary(this.options.identity), peer, this.currentHostPeerId)) {
           void this.ensureConnection(peer, true);
         }
       }
@@ -115,7 +133,7 @@ export class PeerMeshClient {
       this.peers.set(message.peer.peerId, message.peer);
       this.publishPeers();
 
-      if (shouldCreateOffer(toLocalSummary(this.options.identity), message.peer)) {
+      if (shouldConnectPeers(toLocalSummary(this.options.identity), message.peer, this.currentHostPeerId)) {
         void this.ensureConnection(message.peer, true);
       }
       return;
@@ -125,6 +143,7 @@ export class PeerMeshClient {
       this.connections.get(message.peerId)?.connection.close();
       this.connections.delete(message.peerId);
       this.peers.delete(message.peerId);
+      this.options.onPeerLeft?.(message.peerId);
       this.publishPeers();
       return;
     }
@@ -139,12 +158,18 @@ export class PeerMeshClient {
     }
 
     if (message.type === 'answer') {
-      void this.connections.get(message.fromPeerId)?.connection.setRemoteDescription(message.description);
+      const record = this.connections.get(message.fromPeerId);
+
+      if (record) {
+        void record.connection.setRemoteDescription(message.description).then(() => {
+          void this.flushQueuedIceCandidates(message.fromPeerId);
+        });
+      }
       return;
     }
 
     if (message.type === 'ice_candidate') {
-      void this.connections.get(message.fromPeerId)?.connection.addIceCandidate(message.candidate);
+      void this.addOrQueueIceCandidate(message.fromPeerId, message.candidate);
       return;
     }
 
@@ -171,6 +196,7 @@ export class PeerMeshClient {
       channel: null,
       status: 'connecting',
       offered: false,
+      createdAt: Date.now(),
     };
 
     connection.addEventListener('icecandidate', (event) => {
@@ -214,8 +240,17 @@ export class PeerMeshClient {
   }
 
   private async acceptOffer(peer: PeerSummary, description: RTCSessionDescriptionInit): Promise<void> {
+    const existing = this.connections.get(peer.peerId);
+
+    if (existing && existing.channel?.readyState !== 'open') {
+      existing.channel?.close();
+      existing.connection.close();
+      this.connections.delete(peer.peerId);
+    }
+
     const record = await this.ensureConnection(peer, false);
     await record.connection.setRemoteDescription(description);
+    await this.flushQueuedIceCandidates(peer.peerId);
     const answer = await record.connection.createAnswer();
     await record.connection.setLocalDescription(answer);
     this.signaling.send({
@@ -268,6 +303,64 @@ export class PeerMeshClient {
 
     this.options.onPeersChanged(views);
   }
+
+  private async retryStaleOffererConnections(): Promise<void> {
+    const localPeer = toLocalSummary(this.options.identity);
+    const now = Date.now();
+
+    for (const peer of this.peers.values()) {
+      if (peer.peerId === localPeer.peerId || !shouldConnectPeers(localPeer, peer, this.currentHostPeerId)) {
+        continue;
+      }
+
+      if (!shouldCreateOffer(localPeer, peer)) {
+        continue;
+      }
+
+      const record = this.connections.get(peer.peerId);
+
+      if (record?.channel?.readyState === 'open') {
+        continue;
+      }
+
+      if (record && now - record.createdAt < 5000) {
+        continue;
+      }
+
+      record?.channel?.close();
+      record?.connection.close();
+      this.connections.delete(peer.peerId);
+      await this.ensureConnection(peer, true);
+    }
+  }
+
+  private async addOrQueueIceCandidate(peerId: string, candidate: RTCIceCandidateInit): Promise<void> {
+    const record = this.connections.get(peerId);
+
+    if (!record || !record.connection.remoteDescription) {
+      const queued = this.pendingIceCandidates.get(peerId) ?? [];
+      queued.push(candidate);
+      this.pendingIceCandidates.set(peerId, queued);
+      return;
+    }
+
+    await record.connection.addIceCandidate(candidate);
+  }
+
+  private async flushQueuedIceCandidates(peerId: string): Promise<void> {
+    const record = this.connections.get(peerId);
+    const queued = this.pendingIceCandidates.get(peerId);
+
+    if (!record || !queued) {
+      return;
+    }
+
+    this.pendingIceCandidates.delete(peerId);
+
+    for (const candidate of queued) {
+      await record.connection.addIceCandidate(candidate);
+    }
+  }
 }
 
 export function shouldCreateOffer(localPeer: PeerSummary, remotePeer: PeerSummary): boolean {
@@ -276,6 +369,16 @@ export function shouldCreateOffer(localPeer: PeerSummary, remotePeer: PeerSummar
   }
 
   return localPeer.peerId < remotePeer.peerId;
+}
+
+function shouldConnectPeers(localPeer: PeerSummary, remotePeer: PeerSummary, hostPeerId: string): boolean {
+  if (localPeer.role === 'spectator' || remotePeer.role === 'spectator') {
+    if (localPeer.peerId !== hostPeerId && remotePeer.peerId !== hostPeerId) {
+      return false;
+    }
+  }
+
+  return shouldCreateOffer(localPeer, remotePeer);
 }
 
 function toLocalSummary(identity: NetworkIdentity): PeerSummary {

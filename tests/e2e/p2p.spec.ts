@@ -21,6 +21,9 @@ test('syncs one host move and one joiner move over WebRTC DataChannel', async ({
 
     await expect(peerA.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
     await expect(peerB.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
+    await expect(peerA.page.locator('[data-player-count]')).toHaveText('2');
+    await peerA.page.locator('[data-start-game]').click();
+
     await expect(peerA.page.locator('canvas')).toBeVisible();
     await expect(peerB.page.locator('canvas')).toBeVisible();
     await expect(peerA.page.locator('[data-state-hash]')).not.toHaveText('none');

@@ -142,6 +142,7 @@ export interface Heartbeat {
   revision: number;
   eventSeq: number;
   stateHash: string;
+  snapshot?: GameSessionState;
 }
 
 export interface PeerRuntimeView {

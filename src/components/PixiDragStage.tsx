@@ -323,6 +323,12 @@ function drawHand(
   const spacing = Math.min(boardLayout.cardWidth + 10, (boardLayout.cardWidth * 8.8) / Math.max(1, maxCards - 1));
   const totalWidth = spacing * (maxCards - 1);
   const startX = boardLayout.originX - totalWidth / 2;
+  const stageDebugCards: Array<{
+    cardId: CardId;
+    centerX: number;
+    centerY: number;
+    targets: Array<MoveTarget & { centerX: number; centerY: number }>;
+  }> = [];
 
   player.handCardIds.forEach((cardId, index) => {
     const card = game.cardsById[cardId];
@@ -333,6 +339,20 @@ function drawHand(
       width: boardLayout.cardWidth,
       height: boardLayout.cardHeight,
     };
+    stageDebugCards.push({
+      cardId,
+      centerX: cardLayout.centerX,
+      centerY: cardLayout.centerY,
+      targets: cardLegalMoves.map((move) => {
+        const targetLayout = getCardLayoutForTarget(boardLayout, move.target);
+
+        return {
+          ...move.target,
+          centerX: targetLayout.centerX,
+          centerY: targetLayout.centerY,
+        };
+      }),
+    });
     const container = createCardContainer(
       card.color,
       CARD_COLOR_LABELS[card.color],
@@ -368,6 +388,10 @@ function drawHand(
 
     handLayer.addChild(container);
   });
+
+  window.__PENGUIN_STAGE_DEBUG__ = {
+    handCards: stageDebugCards,
+  };
 }
 
 function createCardContainer(
