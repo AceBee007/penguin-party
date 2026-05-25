@@ -386,7 +386,8 @@ type HostMessage =
 
 interface ClientGameView {
   publicState: PublicGameView;
-  privateState: PrivatePlayerView;
+  privateState: PrivatePlayerView | null;
+  localRole: 'host' | 'player' | 'spectator';
 }
 
 interface PublicGameView {
@@ -416,7 +417,8 @@ interface PrivatePlayerView {
 ```
 
 UI 表示用の `ClientGameView` に含めるべきでないものは、他プレイヤーの `handCardIds`、他プレイヤーのカード色一覧、乱数シード全体、検証前の仮置き結果です。
-ただし、ホスト切断後にゲームを継続するための P2P 複製状態では、`docs/network-spec.md` に従って完全なゲーム情報を各 peer が保持する場合があります。
+spectator の `privateState` は `null` とし、手札、山札順、配札順、非公開乱数 seed を含めません。
+ただし、ホスト切断後にゲームを継続するための P2P 複製状態では、`docs/network-spec.md` に従って完全なゲーム情報を player peer が保持する場合があります。
 その場合でも、UI はローカルプレイヤー以外の手札を表示してはいけません。
 
 ## 11. ホスト権威 peer が持っておくと便利なもの

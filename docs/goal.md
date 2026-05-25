@@ -10,18 +10,21 @@
 - `docs/ui-spec.md`
 - `docs/network-spec.md`
 
-## Goal 1: ローカルで1人プレイできる
+## Goal 1: ローカルで1人操作の検証モードを遊べる
 
 ### 目的
 
 まずはネットワークを実装せず、1つのブラウザ内でゲームルール、盤面、手札操作、ラウンド進行を確認できるようにします。
 この段階では P2P、ルーム作成、signaling server、host migration は実装しません。
+`docs/game-rules.ja.md` の正式なプレイ人数は2〜6人なので、ここでの「1人」は「1つのブラウザで1人のユーザーが操作するローカル検証モード」を意味します。
+ゲーム状態としては最低2人分の player seat を作り、相手席は dummy player または hot-seat 操作で扱います。
 
 ### 実装範囲
 
 - React + PixiJS でゲーム画面を表示する
 - `docs/game-rules.ja.md` に従ってカード、山札、配札、盤面、合法手を実装する
-- 1人用のローカル検証モードを用意する
+- 1人操作用のローカル検証モードを用意する
+- ルール上は2〜6人の player state として扱い、1人専用ルールは作らない
 - 手札を画面下部に表示する
 - 盤面にプレイ済みカードをピラミッド状に表示する
 - 手札カードをドラッグし、合法位置へ drop できるようにする
@@ -53,7 +56,7 @@
 
 - `src/game/` に純粋なゲームルール実装
 - `src/ui/` または `src/components/` にローカルゲーム画面
-- `tests/e2e/` にローカル1人プレイの smoke test
+- `tests/e2e/` にローカル1人操作モードの smoke test
 
 ## Goal 2: 2人 P2P で1手同期できる
 
@@ -110,7 +113,8 @@
 
 ### 目的
 
-最後に、最大6人の P2P multiplayer を想定して、full mesh、Peer C 以降の参加、同期 fan-out、host 切断時の継続を検証します。
+最後に、最大6人の player による P2P multiplayer を想定して、full mesh、Peer C 以降の参加、同期 fan-out、host 切断時の継続を検証します。
+player 上限は6人ですが、ゲーム中の途中参加は spectator として許容します。
 
 ### 実装範囲
 
@@ -119,10 +123,15 @@
 - Peer C 以降の late join を実装する
 - 新規参加 peer が current host から snapshot を受け取り、現在の盤面に追いつける
 - 6人全員に一意な `PlayerId` と席順を割り当てる
-- 各 peer が最低1手を実行できる
-- 各手が全 peer に同期される
-- `revision` と `stateHash` が全 peer で一致する
-- 7人目の参加を `room_full` として拒否する
+- 各 player peer が最低1手を実行できる
+- 各手が全 player peer に同期され、spectator には公開状態として同期される
+- player peer 間で `revision` と完全 snapshot の `stateHash` が一致する
+- spectator は host が送った spectator snapshot の `revision` と公開状態 hash に追いつく
+- lobby 中の7人目の player 参加を `room_full` として拒否する
+- playing 中の7人目以降の参加は spectator として許可する
+- spectator は `playerId: null` とし、手札、山札順、配札順、非公開乱数 seed を受け取らない
+- spectator は各 player のカード所持数と場のピラミッドだけをリアルタイムに見られる
+- private room は一覧に表示し、player/spectator のどちらの参加でもパスワードを必須にする
 - host heartbeat を実装する
 - host 切断時に deterministic random election で次 host を選べる
 - 新 host が game logic を継続できる
@@ -133,7 +142,8 @@
 - Peer B: 最初の参加者
 - Peer C: late join と3人同期確認
 - Peer D/E/F: 6人 full room 確認
-- 7人目: room full rejection 確認
+- 7人目 player: lobby 中の room full rejection 確認
+- 7人目以降 spectator: playing 中の観戦参加と redacted snapshot 確認
 
 ### 完了条件
 
@@ -145,8 +155,12 @@
 - 6人全員が一意な player identity を持つ
 - 6人全員の画面で player list と手札数表示が一致する
 - 6人全員が最低1回、代表的な gameplay action を実行できる
-- すべての action 後に全 peer の `revision` と `stateHash` が一致する
-- 7人目の join が拒否される
+- すべての action 後に全 player peer の `revision` と完全 snapshot の `stateHash` が一致する
+- spectator は同じ `revision` の公開状態を表示し、spectator snapshot hash が host と一致する
+- lobby 中の7人目 player join が拒否される
+- playing 中の7人目以降の join が spectator として成功する
+- spectator は `playerId: null` で、host election と quorum に含まれない
+- spectator の local state に `privateStateByPlayerId`, `hostOnlyStateReplica`, 山札順、各 player の手札 cardId が存在しない
 - host を閉じた後、残り peer が同じ next host を選ぶ
 - new host の1手が他 peer に同期される
 - console error と failed network request がない
@@ -156,6 +170,8 @@
 - 6人対応済みの `src/network/peerMesh.ts`
 - host migration 対応済みの `src/network/hostElection.ts`
 - 6人 P2P e2e test
+- spectator join e2e test
+- private room password e2e test
 - host disconnect e2e test
 
 ## 実装順序の原則
@@ -164,6 +180,8 @@
 - Goal 2 が完了するまで6人 full mesh と host migration を実装しない
 - 各 Goal の最後に `npm run test`, `npm run build`, `npm run test:e2e` を実行する
 - 失敗したテストを残したまま次の Goal に進まない
-- 仕様に迷った場合は `docs/game-rules.ja.md`、`docs/game-spec.md`、`docs/ui-spec.md`、`docs/network-spec.md` の順に確認する
+- ルールに迷った場合は `docs/game-rules.ja.md` を正とする
+- 通信と multiplayer state に迷った場合は `docs/network-spec.md` を正とする
+- UI 表示に迷った場合は `docs/ui-spec.md` を正とする
 - マルチプレイ通信は current host authoritative を正とする
 - ローカル Node.js server は room/lobby/signaling のみを担当する

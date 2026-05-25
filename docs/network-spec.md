@@ -12,16 +12,17 @@
 - ローカルの Node.js サーバーは、ルーム作成、ルーム検索、パスワード確認、WebRTC signaling のみに使う
 - Node.js サーバーはゲームルールの正状態を持たない
 - ゲームのメインロジックは、現在のゲームホストだけが実行する
-- 各プレイヤーのゲームセッションは、ホスト交代に備えて完全なゲーム状態、イベントログ、最新スナップショットを保持する
+- 各 player peer のゲームセッションは、ホスト交代に備えて完全なゲーム状態、イベントログ、最新スナップショットを保持する
+- spectator peer は観戦に必要な公開状態だけを保持し、手札、山札順、非公開乱数 seed は受け取らない
 - ホスト切断時は、残っているプレイヤーの中からランダムに見える決定的な手順で次のホストを選ぶ
 - private room ではパスワードを設定できる
 
-### 既存仕様との矛盾
+### 仕様の優先順位
 
-`docs/game-spec.md` には、マルチプレイ方針として「サーバーを authoritative にする」と書かれています。
-この文書では、要件に合わせて「ホストを authoritative にする」方式を採用します。
+マルチプレイ通信は、`docs/game-spec.md` とこの文書の両方で「current host authoritative」に統一します。
+ローカル Node.js server は room/lobby/signaling のみを担当し、ゲームルールの正状態は持ちません。
 
-このため、マルチプレイ通信については次の優先順位で扱います。
+仕様の参照優先順位は次の通りです。
 
 1. `docs/network-spec.md`
 2. `docs/game-spec.md`
@@ -31,8 +32,9 @@
 
 ### 要確認またはリスクがある点
 
-1. 各プレイヤーが完全なゲーム情報を持つ場合、他プレイヤーの手札や山札順もローカルに存在します。
+1. player peer が完全なゲーム情報を持つ場合、他プレイヤーの手札や山札順もローカルに存在します。
    UI で隠しても、ブラウザ DevTools などで確認できるため、チート耐性はありません。
+   spectator peer には完全なゲーム情報を配らず、観戦用の公開 snapshot だけを配ります。
    友人同士の軽量オンライン対戦や開発検証には向きますが、公開サービスとして公平性を保証する用途には向きません。
 
 2. Google STUN だけでは、すべてのネットワーク環境で接続できるとは限りません。
@@ -50,9 +52,10 @@
 
 このネットワーク仕様の目的は次の通りです。
 
-- 2〜6人の WebRTC P2P マルチプレイを成立させる
+- 2〜6人の player による WebRTC P2P マルチプレイを成立させる
 - ゲームロジックをホスト 1 人に集約する
-- ホスト以外のプレイヤーも完全な状態を複製し、ホスト切断時にゲームを継続できるようにする
+- ホスト以外の player peer も完全な状態を複製し、ホスト切断時にゲームを継続できるようにする
+- spectator peer は観戦用の公開状態だけを受け取り、host migration には参加しない
 - ローカル Node.js サーバーを中央集権的なゲームサーバーではなく、軽量な signaling/lobby サーバーとして使う
 - public room と private room をサポートする
 - Playwright MCP で Peer A/B/C および最大 Peer F までの検証を行いやすい通信設計にする
@@ -64,8 +67,8 @@
 - 不正プレイヤーに対する強いチート防止
 - サーバー authoritative な公開対戦基盤
 - TURN サーバーによる接続保証
-- 公開配信用の観戦機能
-- ランキング、アカウント、長期保存
+- 不特定多数向けの公開配信、大規模 spectator、配信者向け moderation
+- グローバルランキング、アカウント連動ランキング、長期保存
 - 複数ルームをまたぐ永続的なマッチメイキング
 
 ## 4. 全体構成
@@ -124,13 +127,15 @@ flowchart LR
 - 山札、配札、開始プレイヤーなどのルール状態を生成する
 - プレイヤーコマンドを検証する
 - 確定イベントを採番する
-- 状態スナップショットを全ピアへ配信する
+- role に応じた状態スナップショットを配信する
+  - player peer には host migration 用の完全 snapshot を送る
+  - spectator peer には観戦用の公開 snapshot だけを送る
 - heartbeat を送る
 - 自身が離脱する場合は可能なら host handoff を開始する
 
-### Non-host peers
+### Non-host player peers
 
-ホスト以外の peer も、ホスト交代に備えて完全な複製状態を保持します。
+ホスト以外の player peer も、ホスト交代に備えて完全な複製状態を保持します。
 
 責務:
 
@@ -140,7 +145,18 @@ flowchart LR
 - 状態ハッシュを検証する
 - ホスト heartbeat を監視する
 - ホスト切断時に host election に参加する
-- spectator は状態を受信するが、player command と host election には参加しない
+
+### Spectator peers
+
+spectator peer は、ゲーム中の途中参加者として観戦用の公開状態だけを保持します。
+
+責務:
+
+- current host から spectator snapshot を受け取る
+- 場のピラミッド、各 player の表示名、残り手札数、脱落/上がり状態、得点、接続状態を表示する
+- 手札、山札順、配札順、非公開乱数 seed、host migration 用 snapshot を保持しない
+- `player_command` を送らない
+- host election と quorum に参加しない
 
 ## 5. ネットワーク用語
 
@@ -171,6 +187,7 @@ type PeerConnectionStatus =
 - `PlayerId` はゲーム内プレイヤーとしての ID とする
 - 再接続時は、保存済み `reconnectToken` により同じ `PlayerId` へ復帰する
 - `PeerId` は接続の実体、`PlayerId` はゲーム上の席と扱う
+- spectator はゲーム上の席を持たないため、`playerId: null` とする
 
 ## 6. ルーム仕様
 
@@ -204,7 +221,9 @@ interface RoomMetadata {
 
 - private room も room list に表示する
 - room list では private room に鍵アイコンを表示できるように `visibility: 'private'` または `hasPassword: true` を返す
-- パスワードを知っているプレイヤーだけが player として join できる
+- private room への join は、player と spectator のどちらでもパスワードを必須にする
+- room が `lobby` の場合、パスワード検証後に player として join できる
+- room が `playing` の場合、パスワード検証後に spectator として join できる
 - パスワードが設定されている場合、signaling server が検証する
 - signaling server は平文パスワードを保存しない
 - 開発用の簡易実装でも、最低限 `crypto.scrypt` などで password hash を保存する
@@ -356,7 +375,10 @@ export const RTC_CONFIG: RTCConfiguration = {
 
 ### Topology
 
-2〜6人では full mesh を標準とします。
+2〜6人の player peer では full mesh を標準とします。
+spectator peer は player 上限には含めません。
+spectator peer は current host との DataChannel 接続を必須とし、他 player との full mesh 接続は必須にしません。
+これにより、7人目以上の spectator を許容しつつ、host election の対象とする player mesh は最大6人に保ちます。
 
 必要な PeerConnection 数:
 
@@ -370,9 +392,10 @@ export const RTC_CONFIG: RTCConfiguration = {
 
 理由:
 
-- 最大6人なので full mesh の接続数は許容範囲
+- player は最大6人なので full mesh の接続数は許容範囲
 - ホスト切断時も、残った peer 同士が直接通信できる
 - Peer C 以降の late join や同期監査を検証しやすい
+- spectator は host migration に参加しないため、完全な player mesh に入れない
 
 ### Offerer の決定
 
@@ -463,11 +486,15 @@ interface HostHello {
   type: 'host_hello';
   currentHostPeerId: PeerId;
   hostEpoch: HostEpoch;
-  playerIdByPeerId: Record<PeerId, PlayerId>;
-  snapshot: ReplicatedGameSnapshot;
-  eventLogTail: GameEvent[];
+  playerIdByPeerId: Record<PeerId, PlayerId | null>;
+  roleByPeerId: Record<PeerId, PeerRole>;
+  snapshot: RoleScopedSnapshot;
+  eventLogTail?: GameEvent[];
 }
 ```
+
+`eventLogTail` は player peer 向けの完全同期にだけ使います。
+spectator peer には、手札や山札順を推測できる event log を送らず、必要な表示状態を `SpectatorGameSnapshot` にまとめて送ります。
 
 ### PeerReady
 
@@ -510,6 +537,7 @@ type PlayerCommand =
 
 - host 以外は `player_command` を確定してはいけない
 - host は `playerId` と送信元 `PeerId` の対応を検証する
+- `playerId: null` の spectator は `player_command` を送ってはいけない
 - host は現在の `activePlayerId` と合法手を検証する
 - 同じ `commandId` を複数回受信した場合は冪等に処理する
 
@@ -538,11 +566,19 @@ interface CommandRejected {
 ```ts
 interface EventCommitted {
   type: 'event_committed';
-  event: GameEvent;
+  event: RoleScopedEvent;
   eventSeq: EventSeq;
   revision: Revision;
   stateHash: string;
-  snapshot?: ReplicatedGameSnapshot;
+  snapshot?: RoleScopedSnapshot;
+}
+
+type RoleScopedEvent = GameEvent | SpectatorGameEvent;
+
+interface SpectatorGameEvent {
+  kind: 'spectator_event';
+  publicState: PublicGameView;
+  revision: Revision;
 }
 ```
 
@@ -551,6 +587,7 @@ interface EventCommitted {
 - 小規模ゲームなので、実装初期は各 `event_committed` に snapshot を付けてよい
 - 最適化する場合は、通常は event のみ、5 event ごとまたはラウンド境界で snapshot を付ける
 - peer は `eventSeq` が連続していない場合、即座に `resync_request` を送る
+- spectator peer に送る `event_committed` は `SpectatorGameEvent` または `SpectatorGameSnapshot` に redaction し、hidden information を含む `GameEvent` をそのまま送らない
 
 ### StateSnapshot
 
@@ -559,8 +596,8 @@ late join、再同期、host migration 後に使います。
 ```ts
 interface StateSnapshot {
   type: 'state_snapshot';
-  snapshot: ReplicatedGameSnapshot;
-  eventLogTail: GameEvent[];
+  snapshot: RoleScopedSnapshot;
+  eventLogTail?: GameEvent[];
   revision: Revision;
   stateHash: string;
 }
@@ -589,17 +626,19 @@ interface Heartbeat {
 ## 11. 複製状態
 
 各 peer は次の状態を保持します。
+player peer と spectator peer では、保持できる snapshot の種類が異なります。
 
 ```ts
 interface ReplicatedGameSession {
   roomId: RoomId;
   localPeerId: PeerId;
-  localPlayerId: PlayerId;
+  localPlayerId: PlayerId | null;
+  localRole: PeerRole;
 
   currentHostPeerId: PeerId;
   hostEpoch: HostEpoch;
 
-  snapshot: ReplicatedGameSnapshot;
+  snapshot: RoleScopedSnapshot;
   eventLog: GameEvent[];
 
   lastEventSeq: EventSeq;
@@ -609,10 +648,19 @@ interface ReplicatedGameSession {
   peers: Record<PeerId, PeerRuntimeState>;
 }
 
+type RoleScopedSnapshot = ReplicatedGameSnapshot | SpectatorGameSnapshot;
+
 interface ReplicatedGameSnapshot {
+  kind: 'player_replica';
   publicState: PublicGameView;
   privateStateByPlayerId: Record<PlayerId, PrivatePlayerReplica>;
   hostOnlyStateReplica: HostOnlyStateReplica;
+  revision: Revision;
+}
+
+interface SpectatorGameSnapshot {
+  kind: 'spectator_view';
+  publicState: PublicGameView;
   revision: Revision;
 }
 
@@ -640,17 +688,27 @@ interface PeerRuntimeState {
 }
 ```
 
+spectator peer の `eventLog` は空配列、または公開表示の再生に必要な redacted event だけにします。
+hidden information を含む `GameEvent` tail は player peer にだけ配信します。
+
 ### 完全複製の扱い
 
-この仕様では、ホスト交代を成立させるため、非ホスト peer も `privateStateByPlayerId` と `hostOnlyStateReplica` を保持します。
+この仕様では、ホスト交代を成立させるため、非ホスト player peer も `privateStateByPlayerId` と `hostOnlyStateReplica` を保持します。
 これは開発と友人同士のプレイを優先した設計です。
 
-UI 実装では、ローカルプレイヤー以外の手札を表示してはいけません。
-ただし、DevTools などで内部状態を見られることは防げません。
+spectator peer は host migration に参加しないため、`SpectatorGameSnapshot` だけを保持します。
+`SpectatorGameSnapshot` には `privateStateByPlayerId`, `hostOnlyStateReplica`, 山札順、配札順、非公開乱数 seed、各 player の手札 cardId を含めません。
+
+UI 実装では、player peer でもローカルプレイヤー以外の手札を表示してはいけません。
+ただし、player peer では DevTools などで内部状態を見られることは防げません。
+spectator peer はそもそも hidden information を受け取らないため、通常の spectator UI と DevTools からも hidden information を見られない設計にします。
 
 ### State hash
 
 各 peer は snapshot 適用後に state hash を計算します。
+player peer は完全 snapshot の hash を計算し、host election と desync 検出に使います。
+spectator peer は spectator snapshot の hash だけを計算し、観戦表示の desync 検出にだけ使います。
+spectator peer の hash は host election と quorum には使いません。
 
 ```ts
 interface StateHashInput {
@@ -667,7 +725,8 @@ interface StateHashInput {
 - JSON は key order を固定して canonicalize する
 - hash は SHA-256 を使う
 - host heartbeat に `stateHash` を含める
-- 非ホストは不一致を検出したら `resync_request` を送る
+- 非ホスト player peer は不一致を検出したら `resync_request` を送る
+- spectator peer は spectator snapshot の不一致を検出したら再取得を要求するが、host election には進まない
 
 ## 12. ゲームコマンド処理
 
@@ -695,7 +754,7 @@ sequenceDiagram
 
 ### peer 側の検証
 
-各 peer は、ホストから受け取った `event_committed` をそのまま信じるだけでなく、可能な範囲でローカルの純粋関数で再検証します。
+player peer は、ホストから受け取った `event_committed` をそのまま信じるだけでなく、可能な範囲でローカルの純粋関数で再検証します。
 
 検証するもの:
 
@@ -705,6 +764,9 @@ sequenceDiagram
 - cardId がそのプレイヤーの手札に存在する
 - target が合法手である
 - 適用後の `stateHash` が host の報告と一致する
+
+spectator peer は hidden information を持たないため、完全な合法手再検証はしません。
+spectator peer は `eventSeq`, `hostEpoch`, spectator snapshot hash、公開表示の整合性だけを確認します。
 
 不一致の場合:
 
@@ -826,7 +888,8 @@ sequenceDiagram
 
 最大6人なので、以下のシンプルな quorum を使います。
 
-- connected peers の過半数が同じ `newHostPeerId` を受け入れたら host migration 成功
+- connected player peers の過半数が同じ `newHostPeerId` を受け入れたら host migration 成功
+- spectator peer は quorum の分母にも投票にも含めない
 - 2人プレイで host が落ちた場合、残り1人が単独で host になれる
 - quorum が割れた場合、ゲームを pause し、UI に再同期またはルーム作り直しを促す
 
@@ -872,18 +935,21 @@ room が `lobby` の間に Peer C 以降が参加した場合、その peer は 
 room が `playing` の間に新 peer が参加した場合、その peer は spectator として参加します。
 
 1. signaling server が `role: 'spectator'` と既存 peer 一覧を返す
-2. spectator と既存 peer が full mesh 接続を作る
-3. current host が `host_hello` と snapshot を spectator に送る
-4. spectator は snapshot を表示用に適用する
-5. spectator は `peer_ready` を返す
-6. host は `spectator_joined` event または presence update を commit する
+2. spectator は current host と DataChannel 接続を作る
+3. 必要に応じて spectator と他 peer の presence 用接続を作ってもよいが、full mesh は必須にしない
+4. current host が `host_hello` と `SpectatorGameSnapshot` を spectator に送る
+5. spectator は snapshot を表示用に適用する
+6. spectator は `peer_ready` を返す
+7. host は `spectator_joined` event または presence update を commit する
 
 spectator の制約:
 
-- `PlayerId` は割り当てない、または `playerId: null` とする
+- `PlayerId` は割り当てず、`playerId: null` とする
 - 席順、手札、得点、手番には参加しない
+- `privateStateByPlayerId`, `hostOnlyStateReplica`, event log tail は受け取らない
 - `play_card`, `set_ready`, `start_game` などの player command は送れない
 - host election の候補にしない
+- quorum の分母にも投票にも含めない
 - 次のゲームを同じ room で開始する場合、host が許可すれば player として参加できる
 
 ### Reconnect
@@ -927,6 +993,10 @@ interface JoinRoomError {
   message: string;
 }
 ```
+
+`room_full` は、`status === 'lobby'` で player として参加しようとしたときに `currentPlayerCount >= maxPlayers` の場合だけ返します。
+`status === 'playing'` の room では、7人目以上でも player ではなく spectator として参加を許可します。
+private room の場合も、spectator join にはパスワード検証を必須にします。
 
 ## 16. エラー処理
 
@@ -984,7 +1054,7 @@ WebRTC DataChannel は DTLS により暗号化されます。
 
 守れないもの:
 
-- DevTools で他人の手札を見る行為
+- player peer が DevTools で複製済みの他人の手札を見る行為
 - 改造クライアントによる不正 command 送信
 - 悪意ある host による不正 event commit
 - private room password を知っている人の再配布
@@ -992,7 +1062,7 @@ WebRTC DataChannel は DTLS により暗号化されます。
 公開サービスにする場合は、次のどれかが必要です。
 
 - サーバー authoritative 方式へ変更する
-- hidden information を非ホストに配らない
+- hidden information を非ホスト player peer に配らない
 - cryptographic commit-reveal で山札と手札を扱う
 - アカウント、署名、BAN、監査ログを導入する
 
@@ -1096,11 +1166,12 @@ P2P の動作確認では、少なくとも Peer A、Peer B、Peer C を別々�
 
 1. Peer A/B が接続済みで、room が `playing` の状態を作る
 2. Spectator S が同じ room に参加する
-3. Spectator S が Peer A/B とそれぞれ DataChannel open になる
-4. current host が Spectator S に snapshot を送る
+3. Spectator S が current host と DataChannel open になる
+4. current host が Spectator S に `SpectatorGameSnapshot` を送る
 5. Spectator S の画面が現在の盤面に追いつく
 6. Spectator S には手札、手番、`play_card` 操作が表示されない
-7. Peer A/B の次の1手が Spectator S の画面にも反映される
+7. Spectator S の local state に `privateStateByPlayerId`, `hostOnlyStateReplica`, 山札順、各 player の手札 cardId が存在しない
+8. Peer A/B の次の1手が Spectator S の画面にも反映される
 
 ### Host disconnect flow
 
@@ -1122,8 +1193,11 @@ P2P の動作確認では、少なくとも Peer A、Peer B、Peer C を別々�
 3. 全15本の peer pair が connected になる
 4. 6人全員に一意な `PlayerId` と席順が割り当てられる
 5. ゲーム開始後、各 peer が少なくとも1回代表的な操作を行う
-6. 全 peer の `revision` と `stateHash` が一致する
-7. 7人目の join が `room_full` で拒否される
+6. 全 player peer の `revision` と完全 snapshot の `stateHash` が一致する
+7. lobby 中の7人目の player join が `room_full` で拒否される
+8. playing 中の7人目以降の join は spectator として許可され、`playerId: null` になる
+9. spectator は6人 player の full mesh と host election quorum に含まれない
+10. spectator の `revision` と spectator snapshot hash が host の公開状態と一致する
 
 ## 20. 実装順序
 
@@ -1139,8 +1213,9 @@ P2P の動作確認では、少なくとも Peer A、Peer B、Peer C を別々�
 8. Peer C late join を実装する
 9. full mesh を最大6人まで広げる
 10. host heartbeat と host migration を実装する
-11. private room password を実装する
-12. Playwright MCP で Peer A/B/C、必要に応じて D/E/F を検証する
+11. spectator 用の redacted snapshot を実装する
+12. private room password を実装する
+13. Playwright MCP で Peer A/B/C、必要に応じて D/E/F と spectator を検証する
 
 ## 21. 参考リンク
 

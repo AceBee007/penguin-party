@@ -131,6 +131,7 @@ interface RoomListItemView {
 - `status === 'playing'` のルームは観戦者として参加できる
 - `status === 'playing'` のルームには「観戦」または spectator badge を表示する
 - `currentPlayerCount >= maxPlayers` のルームは満員表示にする
+- `status === 'lobby'` かつ `currentPlayerCount >= maxPlayers` のルームは player として参加できない
 - 満員でも `status === 'playing'` の場合は spectator として参加可能にしてよい
 
 ### 操作
@@ -418,6 +419,7 @@ Validation:
 - spectator は場に出されたピラミッドを見られる
 - spectator は各プレイヤーのカード所持数だけをリアルタイムに見られる
 - spectator は各プレイヤーが実際に持っているカードの色、カードID、カード内容を見られない
+- spectator の local state には、各プレイヤーの手札、山札順、配札順、非公開乱数 seed を持たせない
 - spectator にはローカル手札を表示しない
 - spectator には「観戦中」badge を表示する
 - spectator は `play_card` などの gameplay action を実行できない
@@ -792,6 +794,9 @@ PixiJS 側は `BoardView` と `LocalHandView` の描画・ドラッグ操作に�
 
 - private room は lobby の room list に表示する
 - private room は鍵アイコン付きで表示する
+- player は最大6人
+- lobby 中の7人目 player join は拒否する
+- playing 中の7人目以降の join は spectator として許可する
 - ルーム名は最大32文字
 - プレイヤー名は最大16文字
 - パスワードは最大20文字
