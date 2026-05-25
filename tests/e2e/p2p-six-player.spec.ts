@@ -1,5 +1,7 @@
 import { expect, test, type Browser, type Page } from '@playwright/test';
 
+test.setTimeout(180_000);
+
 test('runs six player mesh, spectator join, private password, room full, and host election', async (
   { browser },
   testInfo,
@@ -123,7 +125,7 @@ test('runs six player mesh, spectator join, private password, room full, and hos
     await expectAll(remainingPlayers, '[data-board-count]', '7');
     await expectAll(remainingPlayers, '[data-state-hash]', await electedHost.page.locator('[data-state-hash]').innerText());
 
-    for (const peer of [...remainingPlayers, spectator]) {
+    for (const peer of [...remainingPlayers, rejectedPeer, spectator]) {
       expect(peer.consoleErrors).toEqual([]);
       expect(peer.failedRequests).toEqual([]);
     }

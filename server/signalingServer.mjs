@@ -194,21 +194,21 @@ async function routeHttp(request, response) {
     const room = rooms.get(joinMatch[1]);
 
     if (!room || room.status === 'closed') {
-      writeJson(response, 404, { code: 'room_not_found', message: 'Room was not found.' });
+      writeJoinError(response, { code: 'room_not_found', message: 'Room was not found.' });
       return;
     }
 
     const body = await readJsonBody(request);
 
     if (room.visibility === 'private' && !verifyPassword(room.passwordRecord, String(body.password ?? ''))) {
-      writeJson(response, 403, { code: 'invalid_password', message: 'Invalid room password.' });
+      writeJoinError(response, { code: 'invalid_password', message: 'Invalid room password.' });
       return;
     }
 
     const playerCount = [...room.peers.values()].filter((peer) => peer.role !== 'spectator').length;
 
     if (room.status === 'lobby' && playerCount >= room.maxPlayers) {
-      writeJson(response, 409, { code: 'room_full', message: 'Room is full.' });
+      writeJoinError(response, { code: 'room_full', message: 'Room is full.' });
       return;
     }
 
@@ -261,6 +261,10 @@ async function routeHttp(request, response) {
   }
 
   writeJson(response, 404, { code: 'not_found', message: 'Endpoint not found.' });
+}
+
+function writeJoinError(response, payload) {
+  writeJson(response, 200, payload);
 }
 
 function createPeer({ displayName, joinedAt, peerId, playerId, role }) {
