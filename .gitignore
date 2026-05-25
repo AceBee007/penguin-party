@@ -1,3 +1,7 @@
+# Node.js
+node_modules/
+.playwright-mcp/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
