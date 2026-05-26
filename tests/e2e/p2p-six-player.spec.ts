@@ -113,6 +113,8 @@ test('runs six player mesh, spectator join, locked room, room full, and host ele
     expect(fullscreenDebug.handLayerChildren).toBe(0);
     expect(fullscreenDebug.perfectPyramidWidth).toBeLessThanOrEqual(fullscreenDebug.stageWidth * 0.95 + 1);
     expect(fullscreenDebug.perfectPyramidHeight).toBeLessThanOrEqual(fullscreenDebug.stageHeight * 0.95 + 1);
+    expect(fullscreenDebug.visibleBoardLeftX).toBeGreaterThanOrEqual(-1);
+    expect(fullscreenDebug.visibleBoardRightX).toBeLessThanOrEqual(fullscreenDebug.stageWidth + 1);
     expect(
       Math.min(
         Math.abs(fullscreenDebug.perfectPyramidWidth - fullscreenDebug.stageWidth * 0.95),
@@ -280,6 +282,8 @@ async function getStageDebug(page: Page, debugId: string) {
           perfectPyramidWidth: number;
           stageHeight: number;
           stageWidth: number;
+          visibleBoardLeftX: number;
+          visibleBoardRightX: number;
         }
       | undefined;
 

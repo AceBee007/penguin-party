@@ -641,6 +641,7 @@ spectator board 最大化:
 - card aspect ratio、横 gap、段間隔は通常 board と同じ比率を使う
 - scale は、完璧なピラミッドの横幅が viewport width の 95% 以下、かつ縦幅が viewport height の 95% 以下になるように計算する
 - width 条件と height 条件のうち、より厳しい条件に合わせて scale を決定する
+- ラウンド中の実際のピラミッドが左または右へ伸びた場合、scale は変えず、現在ラウンドの表示対象範囲の中央が viewport 中央に来るように横方向の origin を再計算する
 - 余った方向には上下または左右の余白があってよい
 - 例: viewport height の95%が950px、viewport width の95%が200pxの場合、width 条件のほうが厳しいため、ピラミッド幅を200pxに合わせる
 

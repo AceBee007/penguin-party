@@ -15,6 +15,7 @@ import {
   createBoardOnlyGeometry,
   createBoardGeometry,
   createPerfectPyramidBoardGeometry,
+  getBoardVisualBounds,
   getVisualBoardX,
 } from './boardGeometry';
 
@@ -52,6 +53,8 @@ interface BoardLayout {
   stageWidth: number;
   stageHeight: number;
   scale: number;
+  minVisualX: number;
+  maxVisualX: number;
 }
 
 interface DragState {
@@ -436,6 +439,8 @@ function writeStageDebug(
 ) {
   const perfectPyramidWidth = boardLayout.cardWidth + 7 * boardLayout.gapX;
   const perfectPyramidHeight = boardLayout.cardHeight + 7 * boardLayout.rowRise;
+  const visibleBoardLeftX = boardLayout.originX + boardLayout.minVisualX * boardLayout.gapX - boardLayout.cardWidth / 2;
+  const visibleBoardRightX = boardLayout.originX + boardLayout.maxVisualX * boardLayout.gapX + boardLayout.cardWidth / 2;
 
   window.__PENGUIN_STAGE_DEBUG__ = {
     debugId,
@@ -451,6 +456,8 @@ function writeStageDebug(
     scale: boardLayout.scale,
     perfectPyramidWidth,
     perfectPyramidHeight,
+    visibleBoardLeftX,
+    visibleBoardRightX,
   };
 }
 
@@ -557,24 +564,16 @@ function createBoardLayout(
   fitMode: BoardFitMode,
 ): BoardLayout {
   const board = game.currentRound?.board;
-  const xValues = [
-    ...(board?.occupiedCellKeys.map((key) => getVisualBoardX(board.cardsByCell[key])) ?? []),
-    ...legalMoves.map((move) => getVisualBoardX(move.target)),
-    0,
+  const displayTargets = [
+    ...(board?.occupiedCellKeys.map((key) => board.cardsByCell[key]) ?? []),
+    ...legalMoves.map((move) => move.target),
   ];
-  const levelValues = [
-    ...(board?.occupiedCellKeys.map((key) => board.cardsByCell[key].level) ?? []),
-    ...legalMoves.map((move) => move.target.level),
-    0,
-  ];
-  const minX = Math.min(...xValues);
-  const maxX = Math.max(...xValues);
-  const maxLevel = Math.max(...levelValues);
+  const { minVisualX: minX, maxVisualX: maxX, maxLevel } = getBoardVisualBounds(displayTargets);
   const handCardCount = handPlayerId ? getCurrentRoundPlayer(game, handPlayerId)?.handCardIds.length ?? 0 : 0;
   let geometry: ReturnType<typeof createBoardGeometry>;
 
   if (fitMode === 'perfect-pyramid') {
-    geometry = createPerfectPyramidBoardGeometry({ width, height });
+    geometry = createPerfectPyramidBoardGeometry({ width, height, minVisualX: minX, maxVisualX: maxX });
   } else if (showHand) {
     geometry = createBoardGeometry({ width, height, minVisualX: minX, maxVisualX: maxX, maxLevel, handCardCount });
   } else {
@@ -585,6 +584,8 @@ function createBoardLayout(
     ...geometry,
     stageWidth: width,
     stageHeight: height,
+    minVisualX: minX,
+    maxVisualX: maxX,
   };
 }
 

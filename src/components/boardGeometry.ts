@@ -25,6 +25,12 @@ export interface BoardGeometry {
   scale: number;
 }
 
+export interface BoardVisualBounds {
+  minVisualX: number;
+  maxVisualX: number;
+  maxLevel: number;
+}
+
 const PERFECT_PYRAMID_BASE_CARDS = 8;
 const PERFECT_PYRAMID_MAX_LEVEL = 7;
 const MAX_CARD_WIDTH = 78;
@@ -42,6 +48,22 @@ const HAND_SINGLE_ROW_SPAN_RATIO = 8.8;
 
 export function getVisualBoardX(target: PyramidTarget): number {
   return target.x + target.level * 0.5;
+}
+
+export function getBoardVisualBounds(targets: PyramidTarget[]): BoardVisualBounds {
+  if (targets.length === 0) {
+    return {
+      minVisualX: 0,
+      maxVisualX: 0,
+      maxLevel: 0,
+    };
+  }
+
+  return {
+    minVisualX: Math.min(...targets.map(getVisualBoardX)),
+    maxVisualX: Math.max(...targets.map(getVisualBoardX)),
+    maxLevel: Math.max(...targets.map((target) => target.level)),
+  };
 }
 
 export function createBoardGeometry(input: BoardGeometryInput): BoardGeometry {
@@ -113,14 +135,18 @@ export function createBoardOnlyGeometry(input: BoardGeometryInput): BoardGeometr
   };
 }
 
-export function createPerfectPyramidBoardGeometry(input: Pick<BoardGeometryInput, 'width' | 'height'>): BoardGeometry {
+export function createPerfectPyramidBoardGeometry(
+  input: Pick<BoardGeometryInput, 'width' | 'height'> & Partial<Pick<BoardGeometryInput, 'minVisualX' | 'maxVisualX'>>,
+): BoardGeometry {
   const cardWidth = getPerfectPyramidCardWidth(input.width, input.height);
   const cardHeight = cardWidth * CARD_ASPECT_RATIO;
   const gapX = cardWidth + getCardGap(cardWidth);
   const rowRise = cardHeight * ROW_RISE_RATIO;
   const boardHeight = cardHeight + PERFECT_PYRAMID_MAX_LEVEL * rowRise;
   const boardTopY = (input.height - boardHeight) / 2;
-  const originX = input.width / 2 - ((PERFECT_PYRAMID_BASE_CARDS - 1) / 2) * gapX;
+  const minVisualX = input.minVisualX ?? 0;
+  const maxVisualX = input.maxVisualX ?? PERFECT_PYRAMID_BASE_CARDS - 1;
+  const originX = input.width / 2 - ((minVisualX + maxVisualX) / 2) * gapX;
   const baseY = boardTopY + cardHeight / 2 + PERFECT_PYRAMID_MAX_LEVEL * rowRise;
 
   return {
