@@ -89,6 +89,7 @@ export function MultiplayerGame() {
   const [networkStatus, setNetworkStatus] = useState('idle');
   const [hostPeerId, setHostPeerId] = useState<string | null>(null);
   const meshRef = useRef<PeerMeshClient | null>(null);
+  const scoreboardOverlayPanelRef = useRef<HTMLElement | null>(null);
   const nameReservationTokenRef = useRef<string | null>(null);
   const identityRef = useRef<NetworkIdentity | null>(null);
   const gameRef = useRef<GameSessionState | null>(null);
@@ -320,6 +321,32 @@ export function MultiplayerGame() {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isBoardMaximized]);
+
+  useEffect(() => {
+    if (!isScoreboardExpanded || currentScene !== 'game_play') {
+      return undefined;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      if (scoreboardOverlayPanelRef.current?.contains(target) || target.closest('[data-scoreboard-toggle]')) {
+        return;
+      }
+
+      setIsScoreboardExpanded(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [currentScene, isScoreboardExpanded]);
 
   const scoreboardPlayers = useMemo<ScoreboardPlayerView[]>(() => {
     if (game) {
@@ -873,6 +900,7 @@ export function MultiplayerGame() {
                 className="scoreboard-overlay__panel"
                 aria-label="Expanded scoreboard"
                 aria-modal="false"
+                ref={scoreboardOverlayPanelRef}
                 role="dialog"
               >
                 <div className="scoreboard-overlay__header">

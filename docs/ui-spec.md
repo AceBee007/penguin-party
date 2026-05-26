@@ -581,6 +581,7 @@ host が `waiting_room` 中に退出した場合、残存 player のうち新 ho
 - overlay には room name、player name 一覧、現在の score、現在 active player を示す明暗変化のヒントを表示する
 - overlay 内の player 行でも active player は同じ青系の明暗アニメーションで示す
 - 同じ展開アイコンまたは overlay 内の閉じるアイコンをもう一度クリックすると、expanded scoreboard を閉じる
+- expanded scoreboard の panel 外をクリックした場合も、expanded scoreboard を閉じる
 
 ```ts
 interface CompactScoreboardPlayerView {

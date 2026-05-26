@@ -163,6 +163,11 @@ test('uses compact mobile scoreboard and confirms leaving during game play', asy
     await expect(peerA.page.locator('[data-scoreboard-overlay]')).toContainText(names[1]);
     await expect(peerA.page.locator('[data-active-scoreboard-hint]')).toContainText('Active player');
 
+    await peerA.page.mouse.click(5, 100);
+    await expect(peerA.page.locator('[data-scoreboard-overlay]')).toHaveCount(0);
+
+    await peerA.page.locator('[data-scoreboard-toggle]').click();
+    await expect(peerA.page.locator('[data-scoreboard-overlay]')).toBeVisible();
     await peerA.page.getByLabel('Collapse scoreboard').last().click();
     await expect(peerA.page.locator('[data-scoreboard-overlay]')).toHaveCount(0);
 
