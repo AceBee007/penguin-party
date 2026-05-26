@@ -74,6 +74,38 @@ test('renders the local Pixi game and commits a drag/drop move', async ({ page }
   expect(failedRequests).toEqual([]);
 });
 
+test('wraps the local hand inside a narrow smartphone Pixi viewport', async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const failedRequests: string[] = [];
+
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  page.on('requestfailed', (request) => {
+    failedRequests.push(`${request.method()} ${request.url()}`);
+  });
+
+  await page.setViewportSize({ width: 360, height: 640 });
+  await page.goto('/?mode=local-test');
+  await expect(page.locator('canvas')).toBeVisible();
+
+  await expect.poll(async () => (await getHandLayoutDebug(page)).handCards.length).toBeGreaterThan(0);
+  const debug = await getHandLayoutDebug(page);
+
+  expect(debug.handRows).toBeGreaterThan(1);
+  expect(debug.handBottomY).toBeLessThanOrEqual(debug.stageHeight + 1);
+  for (const card of debug.handCards) {
+    expect(card.centerX - card.width / 2).toBeGreaterThanOrEqual(-1);
+    expect(card.centerX + card.width / 2).toBeLessThanOrEqual(debug.stageWidth + 1);
+    expect(card.centerY + card.height / 2).toBeLessThanOrEqual(debug.stageHeight + 1);
+  }
+
+  expect(consoleErrors).toEqual([]);
+  expect(failedRequests).toEqual([]);
+});
+
 async function getFirstLegalDrag(page: Page) {
   return page.evaluate(() => {
     const debug = window.__PENGUIN_STAGE_DEBUG__ as
@@ -96,6 +128,33 @@ async function getFirstLegalDrag(page: Page) {
           endY: target.centerY,
         }
       : null;
+  });
+}
+
+async function getHandLayoutDebug(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_STAGE_DEBUG__ as
+      | {
+          handCards: Array<{
+            centerX: number;
+            centerY: number;
+            width: number;
+            height: number;
+          }>;
+          handBottomY: number;
+          handRows: number;
+          stageHeight: number;
+          stageWidth: number;
+        }
+      | undefined;
+
+    return {
+      handBottomY: debug?.handBottomY ?? -1,
+      handCards: debug?.handCards ?? [],
+      handRows: debug?.handRows ?? -1,
+      stageHeight: debug?.stageHeight ?? -1,
+      stageWidth: debug?.stageWidth ?? -1,
+    };
   });
 }
 

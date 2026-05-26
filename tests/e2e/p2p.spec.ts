@@ -112,6 +112,43 @@ test('starts correctly after the waiting room host leaves', async ({ browser }, 
   }
 });
 
+test('keeps waiting canvas inside stage frame on a small smartphone viewport', async ({ browser }, testInfo) => {
+  const names = peerNames('WaitUI', testInfo.project.name, 1);
+  const peer = await openPeer(browser, { width: 360, height: 560 });
+
+  try {
+    await peer.page.goto('/');
+    await enterMatchmaking(peer.page, names[0]);
+    await createRoom(peer.page);
+    await expect(peer.page.locator('[data-waiting-for-snapshot]')).toBeVisible();
+
+    const boxes = await peer.page.evaluate(() => {
+      const frame = document.querySelector('.stage-frame')?.getBoundingClientRect();
+      const waiting = document.querySelector('[data-waiting-for-snapshot]')?.getBoundingClientRect();
+
+      return frame && waiting
+        ? {
+            frameBottom: frame.bottom,
+            frameHeight: frame.height,
+            frameTop: frame.top,
+            waitingBottom: waiting.bottom,
+            waitingHeight: waiting.height,
+            waitingTop: waiting.top,
+          }
+        : null;
+    });
+
+    expect(boxes).not.toBeNull();
+    expect(boxes!.waitingTop).toBeGreaterThanOrEqual(boxes!.frameTop - 1);
+    expect(boxes!.waitingBottom).toBeLessThanOrEqual(boxes!.frameBottom + 1);
+    expect(boxes!.waitingHeight).toBeLessThanOrEqual(boxes!.frameHeight + 1);
+    expect(peer.consoleErrors).toEqual([]);
+    expect(peer.failedRequests).toEqual([]);
+  } finally {
+    await peer.context.close();
+  }
+});
+
 test('rejects duplicate online player names before matchmaking', async ({ browser }, testInfo) => {
   const names = peerNames('Dup', testInfo.project.name, 1);
   const peerA = await openPeer(browser, { width: 1280, height: 720 });

@@ -9,7 +9,12 @@ import {
 } from 'pixi.js';
 import { CARD_COLOR_LABELS, getCurrentRoundPlayer, sameTarget } from '../game/rules';
 import type { CardColor, CardId, GameSessionState, LegalMove, MoveTarget, PlayerId } from '../game/types';
-import { createBoardGeometry, getVisualBoardX } from './boardGeometry';
+import {
+  HAND_ROW_SPACING_RATIO,
+  HAND_Y_OFFSET_RATIO,
+  createBoardGeometry,
+  getVisualBoardX,
+} from './boardGeometry';
 
 interface PixiDragStageProps {
   game: GameSessionState;
@@ -42,6 +47,9 @@ interface BoardLayout {
   baseY: number;
   boardTopY: number;
   handBottomY: number;
+  handRows: number;
+  stageWidth: number;
+  stageHeight: number;
   scale: number;
 }
 
@@ -70,6 +78,7 @@ const COLOR_TEXT: Record<CardColor, number> = {
 };
 
 const DESTROY_OPTIONS = { children: true };
+const HAND_HORIZONTAL_PADDING = 30;
 
 export function PixiDragStage({
   game,
@@ -170,7 +179,7 @@ async function startPixiGameStage(
 
     const pointer = dragLayer.toLocal(event.global);
     dragState.container.position.set(pointer.x + dragState.offsetX, pointer.y + dragState.offsetY);
-    const boardLayout = createBoardLayout(app.screen.width, app.screen.height, game, legalMoves);
+    const boardLayout = createBoardLayout(app.screen.width, app.screen.height, game, legalMoves, handPlayerId);
     const hovered = findNearestTarget(pointer.x, pointer.y, dragState.legalTargets, boardLayout);
 
     drawLegalTargets(targetLayer, boardLayout, dragState.legalTargets, hovered);
@@ -200,7 +209,7 @@ async function startPixiGameStage(
   function renderScene() {
     const width = app.screen.width;
     const height = app.screen.height;
-    const boardLayout = createBoardLayout(width, height, game, legalMoves);
+    const boardLayout = createBoardLayout(width, height, game, legalMoves, handPlayerId);
 
     background.clear();
     drawBackground(background, width, height);
@@ -226,7 +235,7 @@ async function startPixiGameStage(
       return;
     }
 
-    const boardLayout = createBoardLayout(app.screen.width, app.screen.height, game, legalMoves);
+    const boardLayout = createBoardLayout(app.screen.width, app.screen.height, game, legalMoves, handPlayerId);
     const target = findNearestTarget(dragState.container.x, dragState.container.y, dragState.legalTargets, boardLayout);
     const cardId = dragState.cardId;
     const draggedContainer = dragState.container;
@@ -327,23 +336,23 @@ function drawHand(
     return;
   }
 
-  const handY = boardLayout.baseY + boardLayout.cardHeight * 2.22;
   const maxCards = player.handCardIds.length;
-  const spacing = Math.min(boardLayout.cardWidth + 10, (boardLayout.cardWidth * 8.8) / Math.max(1, maxCards - 1));
-  const totalWidth = spacing * (maxCards - 1);
-  const startX = boardLayout.originX - totalWidth / 2;
+  const handY = boardLayout.baseY + boardLayout.cardHeight * HAND_Y_OFFSET_RATIO;
+  const cardLayouts = getHandCardLayouts(boardLayout, maxCards);
   const stageDebugCards: Array<{
     cardId: CardId;
     centerX: number;
     centerY: number;
+    width: number;
+    height: number;
     targets: Array<MoveTarget & { centerX: number; centerY: number }>;
   }> = [];
 
   player.handCardIds.forEach((cardId, index) => {
     const card = game.cardsById[cardId];
     const cardLegalMoves = canPlay ? legalMoves.filter((move) => move.cardId === cardId) : [];
-    const cardLayout: CardLayout = {
-      centerX: startX + spacing * index,
+    const cardLayout: CardLayout = cardLayouts[index] ?? {
+      centerX: boardLayout.stageWidth / 2,
       centerY: handY,
       width: boardLayout.cardWidth,
       height: boardLayout.cardHeight,
@@ -352,6 +361,8 @@ function drawHand(
       cardId,
       centerX: cardLayout.centerX,
       centerY: cardLayout.centerY,
+      width: cardLayout.width,
+      height: cardLayout.height,
       targets: cardLegalMoves.map((move) => {
         const targetLayout = getCardLayoutForTarget(boardLayout, move.target);
 
@@ -404,8 +415,40 @@ function drawHand(
     dragLayerChildren: dragLayer.children.length,
     boardTopY: boardLayout.boardTopY,
     handBottomY: boardLayout.handBottomY,
+    handRows: boardLayout.handRows,
+    stageWidth: boardLayout.stageWidth,
+    stageHeight: boardLayout.stageHeight,
     scale: boardLayout.scale,
   };
+}
+
+function getHandCardLayouts(layout: BoardLayout, cardCount: number): CardLayout[] {
+  if (cardCount <= 0) {
+    return [];
+  }
+
+  const rows = Math.max(1, Math.min(layout.handRows, cardCount));
+  const columns = Math.ceil(cardCount / rows);
+  const availableWidth = Math.max(layout.cardWidth, layout.stageWidth - HAND_HORIZONTAL_PADDING * 2);
+  const handY = layout.baseY + layout.cardHeight * HAND_Y_OFFSET_RATIO;
+  const rowSpacingY = layout.cardHeight * HAND_ROW_SPACING_RATIO;
+
+  return Array.from({ length: cardCount }, (_, index) => {
+    const row = Math.floor(index / columns);
+    const column = index % columns;
+    const rowStartIndex = row * columns;
+    const rowCardCount = Math.min(columns, cardCount - rowStartIndex);
+    const maxSpacing = rowCardCount > 1 ? Math.max(0, (availableWidth - layout.cardWidth) / (rowCardCount - 1)) : 0;
+    const spacing = rowCardCount > 1 ? Math.min(layout.cardWidth + 10, maxSpacing) : 0;
+    const rowWidth = spacing * (rowCardCount - 1);
+
+    return {
+      centerX: layout.stageWidth / 2 - rowWidth / 2 + spacing * column,
+      centerY: handY + rowSpacingY * row,
+      width: layout.cardWidth,
+      height: layout.cardHeight,
+    };
+  });
 }
 
 function createCardContainer(
@@ -472,7 +515,13 @@ function drawCenteredLabel(layer: Container, label: string, x: number, y: number
   layer.addChild(text);
 }
 
-function createBoardLayout(width: number, height: number, game: GameSessionState, legalMoves: LegalMove[]): BoardLayout {
+function createBoardLayout(
+  width: number,
+  height: number,
+  game: GameSessionState,
+  legalMoves: LegalMove[],
+  handPlayerId: PlayerId | null,
+): BoardLayout {
   const board = game.currentRound?.board;
   const xValues = [
     ...(board?.occupiedCellKeys.map((key) => getVisualBoardX(board.cardsByCell[key])) ?? []),
@@ -487,8 +536,13 @@ function createBoardLayout(width: number, height: number, game: GameSessionState
   const minX = Math.min(...xValues);
   const maxX = Math.max(...xValues);
   const maxLevel = Math.max(...levelValues);
+  const handCardCount = handPlayerId ? getCurrentRoundPlayer(game, handPlayerId)?.handCardIds.length ?? 0 : 0;
 
-  return createBoardGeometry({ width, height, minVisualX: minX, maxVisualX: maxX, maxLevel });
+  return {
+    ...createBoardGeometry({ width, height, minVisualX: minX, maxVisualX: maxX, maxLevel, handCardCount }),
+    stageWidth: width,
+    stageHeight: height,
+  };
 }
 
 function getCardLayoutForTarget(layout: BoardLayout, target: MoveTarget): CardLayout {

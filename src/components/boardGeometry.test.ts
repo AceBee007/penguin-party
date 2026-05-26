@@ -29,4 +29,18 @@ describe('board geometry', () => {
     expect(compact.boardTopY).toBeGreaterThanOrEqual(18);
     expect(compact.handBottomY).toBeLessThanOrEqual(360 - 18 + 0.001);
   });
+
+  it('wraps large hands on narrow stages and reserves vertical space for them', () => {
+    const narrow = createBoardGeometry({
+      width: 344,
+      height: 360,
+      minVisualX: 0,
+      maxVisualX: 8,
+      maxLevel: 0,
+      handCardCount: 18,
+    });
+
+    expect(narrow.handRows).toBeGreaterThan(1);
+    expect(narrow.handBottomY).toBeLessThanOrEqual(360 - 18 + 0.001);
+  });
 });

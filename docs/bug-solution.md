@@ -1,3 +1,31 @@
+# Bug solution: smartphone viewport で待機 canvas と手札が表示領域を超える
+
+## 発見したバグ
+
+- device 解像度が低い smartphone 表示では、`waiting-canvas` の `min-height` が `stage-frame` の実高さより大きくなり、下の UI と overlap する場合がある。
+- 横幅が狭い `stage-frame` / `pixi-root` では、手札を1列に並べるとカードの左右端が Pixi viewport 外へ出る場合がある。
+- `topbar` の grid row 定義が明示されておらず、responsive 時の上部レイアウトの高さ計算を読み取りづらい。
+
+## 原因
+
+- `waiting-canvas` に `min-height: min(360px, 68vh)` が指定されているため、親の `stage-frame` が `hud` と `action-bar` を差し引いた残り高さまで縮んだ場合でも、子要素側が親より高くなれる。
+- Pixi の手札配置は常に1列で、狭い viewport では spacing を圧縮しても必要幅が `pixi-root` の表示幅を超える。
+- 既存の board geometry は縦方向の縮小を考慮していたが、手札が複数行になる場合の縦方向予約を持っていなかった。
+
+## 修正方針
+
+- `stage-frame` を overflow hidden の固定表示枠として扱い、`waiting-canvas` は `min-height: 0` / `max-height: 100%` で親の高さを超えないようにする。
+- `topbar` は `grid-template-rows: auto;` を明示する。
+- Pixi stage の幅が狭く、1列の手札幅が viewport に収まらない場合だけ、手札を複数行に折り返す。
+- 手札の行数を board geometry に渡し、複数行の下端も含めて `handBottomY` が stage 内に収まるようカードサイズと `baseY` を再計算する。
+- debug metrics に手札行数と stage サイズを含め、Playwright でカード端が canvas 内に残ることを確認できるようにする。
+
+## 検証
+
+- unit test で、狭い width かつ手札枚数が多い場合に `handRows > 1` となり、`handBottomY` が viewport 内に収まることを確認する。
+- Playwright で smartphone 相当 viewport の local-test を開き、`waiting-canvas` が `stage-frame` を超えないことと、手札カードの左右端・下端が canvas 内に収まることを確認する。
+- 既存の local / multiplayer e2e が引き続き通ることを確認する。
+
 # Bug solution: 小さい viewport で高いピラミッドが見切れる
 
 ## 発見したバグ
