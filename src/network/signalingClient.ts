@@ -61,7 +61,10 @@ export async function joinRoom(
   const payload = (await response.json()) as JoinRoomResponse | { code: string; message: string };
 
   if (!response.ok || 'code' in payload) {
-    throw new Error('message' in payload ? payload.message : `Join failed: ${response.status}`);
+    throw new JoinRoomFailure(
+      'code' in payload ? payload.code : 'join_failed',
+      'message' in payload ? payload.message : `Join failed: ${response.status}`,
+    );
   }
 
   return {
@@ -69,6 +72,16 @@ export async function joinRoom(
     joinedAt: Date.now(),
     displayName: request.displayName,
   };
+}
+
+export class JoinRoomFailure extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'JoinRoomFailure';
+  }
 }
 
 export async function markRoomPlaying(roomId: string, httpUrl = getSignalingHttpUrl()): Promise<void> {

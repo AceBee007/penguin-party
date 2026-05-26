@@ -1,14 +1,12 @@
 import type { CardId, GameEvent, GameSessionState, MoveTarget, PlayerId } from '../game/types';
 
-export type RoomVisibility = 'public' | 'private';
-export type RoomStatus = 'lobby' | 'playing' | 'closed';
+export type RoomStatus = 'waiting_for_start' | 'playing';
 export type PeerRole = 'host' | 'player' | 'spectator';
 export type PeerConnectionStatus = 'new' | 'signaling' | 'connecting' | 'connected' | 'disconnected' | 'closed';
 
 export interface RoomMetadata {
   roomId: string;
   roomName: string;
-  visibility: RoomVisibility;
   createdAt: number;
   updatedAt: number;
   hostPeerId: string;
@@ -42,7 +40,6 @@ export interface NetworkIdentity {
 export interface CreateRoomRequest {
   roomName: string;
   hostDisplayName: string;
-  visibility: RoomVisibility;
   password?: string;
   maxPlayers: 6;
 }

@@ -2,7 +2,7 @@ import { expect, test, type Browser, type Page } from '@playwright/test';
 
 test.setTimeout(180_000);
 
-test('runs six player mesh, spectator join, private password, room full, and host election', async (
+test('runs six player mesh, spectator join, locked room, room full, and host election', async (
   { browser },
   testInfo,
 ) => {
@@ -18,8 +18,10 @@ test('runs six player mesh, spectator join, private password, room full, and hos
 
   try {
     await peers[0].page.goto('/');
+    await enterMatchmaking(peers[0].page, peers[0].name);
+    await peers[0].page.locator('[data-open-create-room]').click();
     await peers[0].page.locator('[data-create-password]').fill('iceberg');
-    await peers[0].page.getByRole('button', { name: 'Create room' }).click();
+    await peers[0].page.locator('[data-create-room-submit]').click();
     await expect(peers[0].page.locator('[data-room-id]')).toBeVisible();
     const roomId = (await peers[0].page.locator('[data-room-id]').textContent())?.trim();
 
@@ -29,9 +31,11 @@ test('runs six player mesh, spectator join, private password, room full, and hos
 
     const roomList = await peers[0].page.evaluate(async () => {
       const response = await fetch('http://127.0.0.1:8787/rooms');
-      return response.json() as Promise<{ rooms: Array<{ hasPassword: boolean; visibility: string }> }>;
+      return response.json() as Promise<{ rooms: Array<{ hasPassword: boolean; roomId: string; status: string }> }>;
     });
-    expect(roomList.rooms.some((room) => room.hasPassword && room.visibility === 'private')).toBe(true);
+    expect(
+      roomList.rooms.some((room) => room.roomId === roomId && room.hasPassword && room.status === 'waiting_for_start'),
+    ).toBe(true);
 
     const joinedPeers = [peers[0]];
 
@@ -50,11 +54,20 @@ test('runs six player mesh, spectator join, private password, room full, and hos
     }
 
     await rejectedPeer.page.goto('/');
-    await rejectedPeer.page.locator('[data-room-code-input]').fill(roomId);
-    await rejectedPeer.page.locator('[data-join-name]').fill(rejectedPeer.name);
-    await rejectedPeer.page.locator('[data-join-password]').fill('iceberg');
-    await rejectedPeer.page.getByRole('button', { name: 'Join room' }).click();
-    await expect(rejectedPeer.page.locator('[data-game-message]')).toContainText('Room is full');
+    await enterMatchmaking(rejectedPeer.page, rejectedPeer.name);
+    const fullRoom = rejectedPeer.page.locator(`[data-room-item][data-room-code="${roomId}"]`);
+    await expect(fullRoom).toBeVisible({ timeout: 10000 });
+    await expect(fullRoom).toBeDisabled();
+    await expect(fullRoom).toContainText('Full');
+    const fullJoinResponse = await rejectedPeer.page.evaluate(async (targetRoomId) => {
+      const response = await fetch(`http://127.0.0.1:8787/rooms/${targetRoomId}/join`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ displayName: 'Peer G', password: 'iceberg' }),
+      });
+      return response.json() as Promise<{ code: string; message: string }>;
+    }, roomId);
+    expect(fullJoinResponse.code).toBe('room_full');
 
     for (const peer of peers) {
       await expect(peer.page.locator('[data-player-count]')).toHaveText('6', { timeout: 20000 });
@@ -152,12 +165,20 @@ async function openPeer(browser: Browser, name: string, viewport: { width: numbe
   return { context, page, name, consoleErrors, failedRequests };
 }
 
+async function enterMatchmaking(page: Page, name: string) {
+  await page.locator('[data-player-name]').fill(name);
+  await page.getByRole('button', { name: 'Start' }).click();
+  await expect(page.locator('[data-room-list]')).toBeVisible();
+}
+
 async function joinRoom(page: Page, roomId: string, name: string, password: string) {
   await page.goto('/');
-  await page.locator('[data-room-code-input]').fill(roomId);
-  await page.locator('[data-join-name]').fill(name);
+  await enterMatchmaking(page, name);
+  const room = page.locator(`[data-room-item][data-room-code="${roomId}"]`);
+  await expect(room).toBeVisible({ timeout: 10000 });
+  await room.click();
   await page.locator('[data-join-password]').fill(password);
-  await page.getByRole('button', { name: 'Join room' }).click();
+  await page.locator('[data-join-room-submit]').click();
   await expect(page.locator('[data-local-player]')).toHaveText(name, { timeout: 15000 });
 }
 

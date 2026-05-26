@@ -111,13 +111,11 @@ wss.on('connection', (socket) => {
     }
 
     const room = rooms.get(session.roomId);
-    const peer = room?.peers.get(session.peerId);
 
     socketsByPeerId.delete(session.peerId);
 
-    if (room && peer) {
-      peer.connectionStatus = 'disconnected';
-      broadcastToRoom(room, session.peerId, { type: 'peer_left', peerId: session.peerId });
+    if (room) {
+      removePeerFromRoom(room, session.peerId);
     }
   });
 });
@@ -142,7 +140,7 @@ async function routeHttp(request, response) {
 
   if (request.method === 'GET' && url.pathname === '/rooms') {
     writeJson(response, 200, {
-      rooms: [...rooms.values()].filter((room) => room.status !== 'closed').map(buildRoomMetadata),
+      rooms: [...rooms.values()].filter((room) => room.peers.size > 0).map(buildRoomMetadata),
     });
     return;
   }
@@ -151,7 +149,7 @@ async function routeHttp(request, response) {
     const body = await readJsonBody(request);
     const roomName = sanitizeName(body.roomName, 'Penguin Room', 32);
     const hostDisplayName = sanitizeName(body.hostDisplayName, 'Peer A', 16);
-    const visibility = body.visibility === 'private' ? 'private' : 'public';
+    const password = String(body.password ?? '').trim();
     const roomId = createRoomId();
     const now = Date.now();
     const peer = createPeer({
@@ -164,13 +162,12 @@ async function routeHttp(request, response) {
     const room = {
       roomId,
       roomName,
-      visibility,
       createdAt: now,
       updatedAt: now,
       hostPeerId: peer.peerId,
       maxPlayers: MAX_PLAYERS,
-      status: 'lobby',
-      passwordRecord: visibility === 'private' ? createPasswordRecord(String(body.password ?? '')) : null,
+      status: 'waiting_for_start',
+      passwordRecord: password ? createPasswordRecord(password) : null,
       peers: new Map([[peer.peerId, peer]]),
       nextPlayerNumber: 2,
     };
@@ -193,21 +190,27 @@ async function routeHttp(request, response) {
   if (request.method === 'POST' && joinMatch) {
     const room = rooms.get(joinMatch[1]);
 
-    if (!room || room.status === 'closed') {
-      writeJoinError(response, { code: 'room_not_found', message: 'Room was not found.' });
+    if (!room) {
+      writeJoinError(response, { code: 'room_closed', message: 'Room is no longer available.' });
       return;
     }
 
     const body = await readJsonBody(request);
+    const password = String(body.password ?? '').trim();
 
-    if (room.visibility === 'private' && !verifyPassword(room.passwordRecord, String(body.password ?? ''))) {
+    if (room.passwordRecord && !password) {
+      writeJoinError(response, { code: 'password_required', message: 'Room password is required.' });
+      return;
+    }
+
+    if (room.passwordRecord && !verifyPassword(room.passwordRecord, password)) {
       writeJoinError(response, { code: 'invalid_password', message: 'Invalid room password.' });
       return;
     }
 
     const playerCount = [...room.peers.values()].filter((peer) => peer.role !== 'spectator').length;
 
-    if (room.status === 'lobby' && playerCount >= room.maxPlayers) {
+    if (room.status === 'waiting_for_start' && playerCount >= room.maxPlayers) {
       writeJoinError(response, { code: 'room_full', message: 'Room is full.' });
       return;
     }
@@ -245,11 +248,11 @@ async function routeHttp(request, response) {
     const body = await readJsonBody(request);
 
     if (!room) {
-      writeJson(response, 404, { code: 'room_not_found', message: 'Room was not found.' });
+      writeJson(response, 404, { code: 'room_closed', message: 'Room is no longer available.' });
       return;
     }
 
-    if (body.status === 'lobby' || body.status === 'playing' || body.status === 'closed') {
+    if (body.status === 'waiting_for_start' || body.status === 'playing') {
       room.status = body.status;
       room.updatedAt = Date.now();
       writeJson(response, 200, { room: buildRoomMetadata(room) });
@@ -287,7 +290,6 @@ function buildRoomMetadata(room) {
   return {
     roomId: room.roomId,
     roomName: room.roomName,
-    visibility: room.visibility,
     createdAt: room.createdAt,
     updatedAt: room.updatedAt,
     hostPeerId: room.hostPeerId,
@@ -297,6 +299,33 @@ function buildRoomMetadata(room) {
     status: room.status,
     hasPassword: Boolean(room.passwordRecord),
   };
+}
+
+function removePeerFromRoom(room, peerId) {
+  const peer = room.peers.get(peerId);
+
+  if (!peer) {
+    return;
+  }
+
+  room.peers.delete(peerId);
+  room.updatedAt = Date.now();
+
+  if (room.peers.size === 0) {
+    rooms.delete(room.roomId);
+    return;
+  }
+
+  if (room.hostPeerId === peerId) {
+    const nextHost = [...room.peers.values()].find((candidate) => candidate.role !== 'spectator') ?? [...room.peers.values()][0];
+    room.hostPeerId = nextHost.peerId;
+
+    if (nextHost.role !== 'spectator') {
+      nextHost.role = 'host';
+    }
+  }
+
+  broadcastToRoom(room, peerId, { type: 'peer_left', peerId });
 }
 
 function toPeerSummary(peer) {
@@ -405,12 +434,11 @@ function verifyPassword(record, password) {
  * @typedef {object} RoomRecord
  * @property {string} roomId
  * @property {string} roomName
- * @property {'public' | 'private'} visibility
  * @property {number} createdAt
  * @property {number} updatedAt
  * @property {string} hostPeerId
  * @property {number} maxPlayers
- * @property {'lobby' | 'playing' | 'closed'} status
+ * @property {'waiting_for_start' | 'playing'} status
  * @property {{ salt: string; hash: string } | null} passwordRecord
  * @property {Map<string, ReturnType<typeof createPeer>>} peers
  * @property {number} nextPlayerNumber

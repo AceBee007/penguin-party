@@ -8,7 +8,9 @@ test('syncs one host move and one joiner move over WebRTC DataChannel', async ({
     await peerA.page.goto('/');
     await peerB.page.goto('/');
 
-    await peerA.page.getByRole('button', { name: 'Create room' }).click();
+    await enterMatchmaking(peerA.page, 'Peer A');
+    await enterMatchmaking(peerB.page, 'Peer B');
+    await createRoom(peerA.page);
     await expect(peerA.page.locator('[data-room-id]')).toBeVisible();
     const roomId = (await peerA.page.locator('[data-room-id]').textContent())?.trim();
 
@@ -16,8 +18,7 @@ test('syncs one host move and one joiner move over WebRTC DataChannel', async ({
       throw new Error('Peer A did not create a room code.');
     }
 
-    await peerB.page.locator('[data-room-code-input]').fill(roomId);
-    await peerB.page.getByRole('button', { name: 'Join room' }).click();
+    await joinRoomFromList(peerB.page, roomId);
 
     await expect(peerA.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
     await expect(peerB.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
@@ -71,6 +72,23 @@ async function openPeer(browser: Browser, viewport: { width: number; height: num
   });
 
   return { context, page, consoleErrors, failedRequests };
+}
+
+async function enterMatchmaking(page: Page, name: string) {
+  await page.locator('[data-player-name]').fill(name);
+  await page.getByRole('button', { name: 'Start' }).click();
+  await expect(page.locator('[data-room-list]')).toBeVisible();
+}
+
+async function createRoom(page: Page) {
+  await page.locator('[data-open-create-room]').click();
+  await page.locator('[data-create-room-submit]').click();
+}
+
+async function joinRoomFromList(page: Page, roomId: string) {
+  const room = page.locator(`[data-room-item][data-room-code="${roomId}"]`);
+  await expect(room).toBeVisible({ timeout: 10000 });
+  await room.click();
 }
 
 async function dragCard(page: Page, targetXOffsetRatio: number) {

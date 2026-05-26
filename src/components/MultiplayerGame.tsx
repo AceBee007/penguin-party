@@ -13,7 +13,7 @@ import {
 import type { CardId, GameSessionState, MoveTarget, PlayerId, RoundPlayerState } from '../game/types';
 import { electNextHostPeerId } from '../network/hostElection';
 import { PeerMeshClient } from '../network/peerMesh';
-import { createRoom, joinRoom, markRoomPlaying } from '../network/signalingClient';
+import { createRoom, JoinRoomFailure, joinRoom, listRooms, markRoomPlaying } from '../network/signalingClient';
 import type {
   EventCommitted,
   Heartbeat,
@@ -24,6 +24,7 @@ import type {
   PeerRuntimeView,
   PeerSummary,
   PlayerCommand,
+  RoomMetadata,
 } from '../network/types';
 
 const INITIAL_DRAG_STATUS: StageDragStatus = {
@@ -31,18 +32,40 @@ const INITIAL_DRAG_STATUS: StageDragStatus = {
   target: 'No target',
 };
 
+const PLAYER_NAME_STORAGE_KEY = 'penguin-party.playerName';
+const ROOM_LIST_POLL_MS = 1600;
+
+type MultiplayerScene =
+  | 'landing_page'
+  | 'matchmaking_lobby'
+  | 'waiting_room'
+  | 'game_play'
+  | 'round_result'
+  | 'game_result';
+
+interface RoomListItemView extends RoomMetadata {
+  canJoin: boolean;
+  joinRole: 'player' | 'spectator' | null;
+}
+
 export function MultiplayerGame() {
+  const [scene, setScene] = useState<MultiplayerScene>('landing_page');
   const [identity, setIdentity] = useState<NetworkIdentity | null>(null);
   const [game, setGame] = useState<GameSessionState | null>(null);
   const [peers, setPeers] = useState<PeerRuntimeView[]>([]);
   const [dragStatus, setDragStatus] = useState<StageDragStatus>(INITIAL_DRAG_STATUS);
+  const [playerName, setPlayerName] = useState(() => readStoredPlayerName());
+  const [rooms, setRooms] = useState<RoomMetadata[]>([]);
+  const [isRoomListLoading, setIsRoomListLoading] = useState(false);
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [passwordRoom, setPasswordRoom] = useState<RoomListItemView | null>(null);
+  const [joinError, setJoinError] = useState<string | null>(null);
+  const [joiningRoomId, setJoiningRoomId] = useState<string | null>(null);
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const [roomName, setRoomName] = useState('Penguin Table');
-  const [displayName, setDisplayName] = useState('Peer A');
   const [createPassword, setCreatePassword] = useState('');
-  const [joinCode, setJoinCode] = useState('');
-  const [joinName, setJoinName] = useState('Peer B');
   const [joinPassword, setJoinPassword] = useState('');
-  const [message, setMessage] = useState('Create or join a local P2P room.');
+  const [message, setMessage] = useState('Enter a player name to start.');
   const [networkStatus, setNetworkStatus] = useState('idle');
   const [hostPeerId, setHostPeerId] = useState<string | null>(null);
   const meshRef = useRef<PeerMeshClient | null>(null);
@@ -51,10 +74,19 @@ export function MultiplayerGame() {
   const peersRef = useRef<PeerRuntimeView[]>([]);
   const hostPeerIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
+  const trimmedPlayerName = playerName.trim();
+  const isPlayerNameValid = trimmedPlayerName.length > 0 && trimmedPlayerName.length <= 16;
+  const roomItems = useMemo(() => rooms.map(toRoomListItem), [rooms]);
 
   useEffect(() => {
     identityRef.current = identity;
   }, [identity]);
+
+  useEffect(() => {
+    if (isPlayerNameValid && typeof window.localStorage.setItem === 'function') {
+      window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, trimmedPlayerName);
+    }
+  }, [isPlayerNameValid, trimmedPlayerName]);
 
   useEffect(() => {
     gameRef.current = game;
@@ -84,6 +116,41 @@ export function MultiplayerGame() {
     },
     [],
   );
+
+  const refreshOpenRooms = useCallback(async (showLoading = false) => {
+    if (showLoading) {
+      setIsRoomListLoading(true);
+    }
+
+    try {
+      const nextRooms = await listRooms();
+      setRooms(nextRooms);
+
+      if (showLoading) {
+        setMessage(nextRooms.length > 0 ? 'Select an open room or create a new one.' : 'No open rooms yet.');
+      }
+    } catch {
+      setRooms([]);
+      setMessage('Signaling server is unavailable. Start npm run signaling.');
+    } finally {
+      if (showLoading) {
+        setIsRoomListLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (identity || scene !== 'matchmaking_lobby') {
+      return undefined;
+    }
+
+    void refreshOpenRooms(true);
+    const intervalId = window.setInterval(() => {
+      void refreshOpenRooms(false);
+    }, ROOM_LIST_POLL_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [identity, refreshOpenRooms, scene]);
 
   useEffect(() => {
     if (!identity || identity.peerId !== hostPeerId || !game) {
@@ -118,6 +185,25 @@ export function MultiplayerGame() {
   const playerCount = peers.filter((peer) => peer.role !== 'spectator').length;
   const spectatorCount = peers.filter((peer) => peer.role === 'spectator').length;
   const canStartGame = Boolean(isHost && !game && playerCount >= 2);
+  const currentScene = useMemo<MultiplayerScene>(() => {
+    if (!identity) {
+      return scene;
+    }
+
+    if (game?.status === 'round_result') {
+      return 'round_result';
+    }
+
+    if (game?.status === 'game_result') {
+      return 'game_result';
+    }
+
+    if (identity.room.status === 'playing' || game) {
+      return 'game_play';
+    }
+
+    return 'waiting_room';
+  }, [game, identity, scene]);
 
   const startMesh = useCallback((nextIdentity: NetworkIdentity) => {
     meshRef.current?.close();
@@ -146,6 +232,7 @@ export function MultiplayerGame() {
 
     meshRef.current = mesh;
     setIdentity(nextIdentity);
+    setScene(nextIdentity.room.status === 'playing' ? 'game_play' : 'waiting_room');
     setHostPeerId(nextHostPeerId);
     hostPeerIdRef.current = nextHostPeerId;
     setPeers([
@@ -161,35 +248,114 @@ export function MultiplayerGame() {
     mesh.connect();
   }, []);
 
+  const handleEnterMatchmaking = useCallback(() => {
+    if (!isPlayerNameValid) {
+      return;
+    }
+
+    setPlayerName(trimmedPlayerName);
+    setScene('matchmaking_lobby');
+    setMessage('Loading open rooms.');
+    void refreshOpenRooms(true);
+  }, [isPlayerNameValid, refreshOpenRooms, trimmedPlayerName]);
+
   const handleCreateRoom = useCallback(async () => {
+    if (!isPlayerNameValid) {
+      setMessage('Enter a player name before creating a room.');
+      return;
+    }
+
+    setIsCreatingRoom(true);
+
     try {
       const password = createPassword.trim();
       const nextIdentity = await createRoom({
         roomName,
-        hostDisplayName: displayName,
-        visibility: password ? 'private' : 'public',
+        hostDisplayName: trimmedPlayerName,
         password: password || undefined,
         maxPlayers: 6,
       });
+      setIsCreateDialogOpen(false);
+      setCreatePassword('');
       setMessage(`Room ${nextIdentity.room.roomId} created. Waiting for players.`);
       startMesh(nextIdentity);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Room creation failed.');
+    } finally {
+      setIsCreatingRoom(false);
     }
-  }, [createPassword, displayName, roomName, startMesh]);
+  }, [createPassword, isPlayerNameValid, roomName, startMesh, trimmedPlayerName]);
 
-  const handleJoinRoom = useCallback(async () => {
+  const handleJoinRoom = useCallback(async (room: RoomListItemView, password?: string) => {
+    if (!isPlayerNameValid) {
+      setMessage('Enter a player name before joining a room.');
+      return;
+    }
+
+    setJoiningRoomId(room.roomId);
+    setJoinError(null);
+
     try {
-      const nextIdentity = await joinRoom(joinCode.trim().toUpperCase(), {
-        displayName: joinName,
-        password: joinPassword.trim() || undefined,
+      const nextIdentity = await joinRoom(room.roomId, {
+        displayName: trimmedPlayerName,
+        password: password?.trim() || undefined,
       });
       setMessage(`Joined room ${nextIdentity.room.roomId}.`);
+      setPasswordRoom(null);
+      setJoinPassword('');
       startMesh(nextIdentity);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Join failed.');
+      const errorMessage = error instanceof Error ? error.message : 'Join failed.';
+
+      if (error instanceof JoinRoomFailure && error.code === 'room_closed') {
+        setPasswordRoom(null);
+        setJoinPassword('');
+        void refreshOpenRooms(true);
+      }
+
+      if (room.hasPassword && passwordRoom?.roomId === room.roomId) {
+        setJoinError(errorMessage);
+      } else {
+        setMessage(errorMessage);
+      }
+    } finally {
+      setJoiningRoomId(null);
     }
-  }, [joinCode, joinName, joinPassword, startMesh]);
+  }, [isPlayerNameValid, passwordRoom?.roomId, refreshOpenRooms, startMesh, trimmedPlayerName]);
+
+  const handleRoomClick = useCallback((room: RoomListItemView) => {
+    if (!room.canJoin) {
+      setMessage('Room is full.');
+      return;
+    }
+
+    if (room.hasPassword) {
+      setPasswordRoom(room);
+      setJoinPassword('');
+      setJoinError(null);
+      return;
+    }
+
+    void handleJoinRoom(room);
+  }, [handleJoinRoom]);
+
+  const handleLeaveRoom = useCallback(() => {
+    meshRef.current?.close();
+    meshRef.current = null;
+    identityRef.current = null;
+    gameRef.current = null;
+    hostPeerIdRef.current = null;
+    eventSeqRef.current = 0;
+    setIdentity(null);
+    setGame(null);
+    setPeers([]);
+    setHostPeerId(null);
+    setDragStatus(INITIAL_DRAG_STATUS);
+    setNetworkStatus('idle');
+    setScene('matchmaking_lobby');
+    setMessage('Returned to matchmaking lobby.');
+    void refreshOpenRooms(true);
+  }, [refreshOpenRooms]);
 
   const handleStartGame = useCallback(() => {
     const currentIdentity = identityRef.current;
@@ -209,6 +375,13 @@ export function MultiplayerGame() {
     gameRef.current = snapshot;
     setGame(snapshot);
     void markRoomPlaying(currentIdentity.room.roomId);
+    const playingIdentity = {
+      ...currentIdentity,
+      room: { ...currentIdentity.room, status: 'playing' as const },
+    };
+    identityRef.current = playingIdentity;
+    setIdentity(playingIdentity);
+    setScene('game_play');
     setMessage(`Started ${playerPeers.length}-player game.`);
 
     for (const peer of peersRef.current) {
@@ -250,13 +423,13 @@ export function MultiplayerGame() {
   }, []);
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" data-scene={currentScene}>
       <header className="topbar">
         <div className="brand">
           <span className="brand__mark" aria-hidden="true" />
           <div className="brand__copy">
             <h1 className="brand__title">Penguin Party</h1>
-            <span className="brand__mode">P2P party room</span>
+            <span className="brand__mode">{sceneLabel(currentScene)}</span>
           </div>
         </div>
         <div className="connection-indicator" aria-label={`P2P status ${networkStatus}`}>
@@ -265,74 +438,183 @@ export function MultiplayerGame() {
         </div>
       </header>
 
-      {!identity ? (
-        <section className="multiplayer-lobby" aria-label="P2P lobby">
-          <div className="lobby-panel">
-            <h2>Create room</h2>
-            <label>
-              Room name
-              <input value={roomName} maxLength={32} onChange={(event) => setRoomName(event.target.value)} />
-            </label>
-            <label>
-              Display name
+      {!identity && scene === 'landing_page' ? (
+        <section className="landing-page" aria-label="Landing page">
+          <div className="landing-form">
+            <label className="player-name-field">
+              Player name
               <input
-                data-create-name
-                value={displayName}
+                data-player-name
+                value={playerName}
                 maxLength={16}
-                onChange={(event) => setDisplayName(event.target.value)}
+                onChange={(event) => setPlayerName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    handleEnterMatchmaking();
+                  }
+                }}
               />
             </label>
-            <label>
-              Password
-              <input
-                data-create-password
-                value={createPassword}
-                maxLength={20}
-                onChange={(event) => setCreatePassword(event.target.value)}
-              />
-            </label>
-            <button type="button" onClick={handleCreateRoom}>
-              Create room
+            <button type="button" disabled={!isPlayerNameValid} onClick={handleEnterMatchmaking}>
+              Start
             </button>
+          </div>
+          <p className="lobby-message" data-game-message>
+            {isPlayerNameValid ? message : 'Player name is required.'}
+          </p>
+        </section>
+      ) : null}
+
+      {!identity && scene === 'matchmaking_lobby' ? (
+        <section className="matchmaking-lobby" aria-label="Matchmaking lobby">
+          <div className="room-list-panel">
+            <div className="room-list-panel__header">
+              <h2>Open rooms</h2>
+              <button className="button-secondary" type="button" onClick={() => void refreshOpenRooms(true)}>
+                Refresh
+              </button>
+            </div>
+            <label className="player-name-field player-name-field--compact">
+              Player name
+              <input
+                data-player-name
+                value={playerName}
+                maxLength={16}
+                onChange={(event) => setPlayerName(event.target.value)}
+              />
+            </label>
+            <div className="room-list-scroll" data-room-list>
+              {isRoomListLoading && roomItems.length === 0 ? (
+                <div className="room-list-empty">Loading rooms</div>
+              ) : null}
+              {!isRoomListLoading && roomItems.length === 0 ? (
+                <div className="room-list-empty">No open rooms</div>
+              ) : null}
+              {roomItems.map((room) => (
+                <button
+                  className="room-list-item"
+                  data-room-code={room.roomId}
+                  data-room-item
+                  data-room-status={room.status}
+                  disabled={!room.canJoin || joiningRoomId !== null}
+                  key={room.roomId}
+                  type="button"
+                  onClick={() => handleRoomClick(room)}
+                >
+                  <span className="room-list-item__main">
+                    <span className="room-list-item__title">
+                      {room.hasPassword ? <span className="room-lock" aria-label="Password required" /> : null}
+                      <strong>{room.roomName}</strong>
+                    </span>
+                    <span className="room-list-item__meta">
+                      {roomStatusLabel(room.status)}
+                      {room.joinRole === 'spectator' ? ' / Spectator' : ''}
+                      {!room.canJoin ? ' / Full' : ''}
+                    </span>
+                  </span>
+                  <span className="room-list-item__count">
+                    {room.currentPlayerCount}/{room.maxPlayers}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
 
-          <div className="lobby-panel">
-            <h2>Join room</h2>
-            <label>
-              Room code
-              <input
-                data-room-code-input
-                value={joinCode}
-                maxLength={8}
-                onChange={(event) => setJoinCode(event.target.value)}
-              />
-            </label>
-            <label>
-              Display name
-              <input
-                data-join-name
-                value={joinName}
-                maxLength={16}
-                onChange={(event) => setJoinName(event.target.value)}
-              />
-            </label>
-            <label>
-              Password
-              <input
-                data-join-password
-                value={joinPassword}
-                maxLength={20}
-                onChange={(event) => setJoinPassword(event.target.value)}
-              />
-            </label>
-            <button type="button" onClick={handleJoinRoom}>
-              Join room
-            </button>
-          </div>
+          <button
+            className="floating-create-room"
+            data-open-create-room
+            type="button"
+            onClick={() => setIsCreateDialogOpen(true)}
+          >
+            新しいゲームルームを作成
+          </button>
           <p className="lobby-message" data-game-message>{message}</p>
+
+          {isCreateDialogOpen ? (
+            <div className="dialog-backdrop">
+              <form
+                className="dialog-card"
+                aria-labelledby="create-room-title"
+                aria-modal="true"
+                role="dialog"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleCreateRoom();
+                }}
+              >
+                <h2 id="create-room-title">Create room</h2>
+                <label>
+                  Room name
+                  <input
+                    data-create-room-name
+                    value={roomName}
+                    maxLength={32}
+                    onChange={(event) => setRoomName(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Password
+                  <input
+                    data-create-password
+                    value={createPassword}
+                    maxLength={20}
+                    type="password"
+                    onChange={(event) => setCreatePassword(event.target.value)}
+                  />
+                </label>
+                <div className="dialog-actions">
+                  <button data-create-room-submit type="submit" disabled={isCreatingRoom || !roomName.trim()}>
+                    Create room
+                  </button>
+                  <button className="button-secondary" type="button" onClick={() => setIsCreateDialogOpen(false)}>
+                    Back
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : null}
+
+          {passwordRoom ? (
+            <div className="dialog-backdrop">
+              <form
+                className="dialog-card"
+                aria-labelledby="join-password-title"
+                aria-modal="true"
+                role="dialog"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleJoinRoom(passwordRoom, joinPassword);
+                }}
+              >
+                <h2 id="join-password-title">Room password</h2>
+                <p>{passwordRoom.roomName}</p>
+                <label>
+                  Password
+                  <input
+                    data-join-password
+                    value={joinPassword}
+                    maxLength={20}
+                    type="password"
+                    onChange={(event) => setJoinPassword(event.target.value)}
+                  />
+                </label>
+                {joinError ? <p className="dialog-error" data-join-error>{joinError}</p> : null}
+                <div className="dialog-actions">
+                  <button data-join-room-submit type="submit" disabled={joiningRoomId === passwordRoom.roomId}>
+                    Join room
+                  </button>
+                  <button className="button-secondary" type="button" onClick={() => setPasswordRoom(null)}>
+                    Back
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : null}
         </section>
-      ) : (
-        <section className="game-shell" aria-label="Penguin Party P2P game">
+      ) : null}
+
+      {identity ? (
+        <section className="game-shell" data-scene={currentScene} aria-label="Penguin Party P2P game">
           <aside className="scoreboard" aria-label="Peers">
             <div className="scoreboard__header">
               <span>Room <strong data-room-id>{identity.room.roomId}</strong></span>
@@ -403,7 +685,7 @@ export function MultiplayerGame() {
                     Start game
                   </button>
                 ) : null}
-                <button type="button" onClick={() => window.location.assign('/')}>
+                <button type="button" onClick={handleLeaveRoom}>
                   Leave
                 </button>
               </div>
@@ -459,7 +741,7 @@ export function MultiplayerGame() {
             ) : null}
           </aside>
         </section>
-      )}
+      ) : null}
     </main>
   );
 
@@ -529,7 +811,7 @@ export function MultiplayerGame() {
     const currentGame = gameRef.current;
     const leftPeer = peersRef.current.find((peer) => peer.peerId === peerId);
 
-    if (!currentIdentity || !currentGame) {
+    if (!currentIdentity) {
       return;
     }
 
@@ -537,12 +819,14 @@ export function MultiplayerGame() {
       .filter((peer) => peer.peerId !== peerId)
       .filter((peer, index, all) => all.findIndex((candidate) => candidate.peerId === peer.peerId) === index)
       .map((peer) => ({ ...peer, connectionStatus: peer.connectionStatus === 'signaling' ? 'connected' : peer.connectionStatus }));
-    const nextHostPeerId = electNextHostPeerId({
-      previousHostPeerId: peerId,
-      peers: candidates,
-      revision: currentGame.revision,
-      stateHash: currentGame.stateHash,
-    });
+    const nextHostPeerId = currentGame
+      ? electNextHostPeerId({
+          previousHostPeerId: peerId,
+          peers: candidates,
+          revision: currentGame.revision,
+          stateHash: currentGame.stateHash,
+        })
+      : selectWaitingRoomHost(candidates)?.peerId ?? null;
 
     if (!nextHostPeerId) {
       setMessage('Host disconnected; no replacement host was available.');
@@ -557,7 +841,7 @@ export function MultiplayerGame() {
 
     let nextGame = currentGame;
 
-    if (leftPeer?.playerId && nextHostPlayerId && currentGame.currentRound?.activePlayerId === leftPeer.playerId) {
+    if (leftPeer?.playerId && nextHostPlayerId && currentGame?.currentRound?.activePlayerId === leftPeer.playerId) {
       const reassigned = reassignActivePlayer(currentGame, nextHostPlayerId);
       nextGame = reassigned;
       gameRef.current = nextGame;
@@ -574,9 +858,11 @@ export function MultiplayerGame() {
       setIdentity(promotedIdentity);
       setMessage('Host disconnected; this peer is the new host.');
 
-      for (const peer of candidates) {
-        if (peer.peerId !== promotedIdentity.peerId) {
-          sendHostHello(promotedIdentity, peer, nextGame);
+      if (nextGame) {
+        for (const peer of candidates) {
+          if (peer.peerId !== promotedIdentity.peerId) {
+            sendHostHello(promotedIdentity, peer, nextGame);
+          }
         }
       }
     } else {
@@ -718,6 +1004,15 @@ function getPlayerPeers(identity: NetworkIdentity, peers: PeerRuntimeView[]): Pe
     .sort((left, right) => numericPlayerIndex(left.playerId) - numericPlayerIndex(right.playerId));
 }
 
+function selectWaitingRoomHost(peers: PeerRuntimeView[]): PeerRuntimeView | null {
+  return (
+    peers
+      .filter((peer) => peer.role !== 'spectator')
+      .filter((peer): peer is PeerRuntimeView & { playerId: PlayerId } => peer.playerId !== null)
+      .sort((left, right) => numericPlayerIndex(left.playerId) - numericPlayerIndex(right.playerId))[0] ?? null
+  );
+}
+
 function redactGameForSpectator(game: GameSessionState): GameSessionState {
   const currentRound = game.currentRound
     ? {
@@ -775,4 +1070,70 @@ function createCommandId(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `command-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function readStoredPlayerName(): string {
+  const stored =
+    typeof window.localStorage.getItem === 'function'
+      ? window.localStorage.getItem(PLAYER_NAME_STORAGE_KEY)?.trim()
+      : null;
+
+  if (stored) {
+    return stored.slice(0, 16);
+  }
+
+  return createDefaultPlayerName();
+}
+
+function createDefaultPlayerName(): string {
+  const bytes = new Uint8Array(3);
+
+  if (typeof crypto !== 'undefined' && 'getRandomValues' in crypto) {
+    crypto.getRandomValues(bytes);
+  } else {
+    bytes.forEach((_, index) => {
+      bytes[index] = Math.floor(Math.random() * 256);
+    });
+  }
+
+  const suffix = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `Player_${suffix}`;
+}
+
+function toRoomListItem(room: RoomMetadata): RoomListItemView {
+  const canJoin = room.status === 'playing' || room.currentPlayerCount < room.maxPlayers;
+
+  return {
+    ...room,
+    canJoin,
+    joinRole: canJoin ? (room.status === 'playing' ? 'spectator' : 'player') : null,
+  };
+}
+
+function roomStatusLabel(status: RoomMetadata['status']): string {
+  return status === 'waiting_for_start' ? '開始待ち' : 'プレイ中';
+}
+
+function sceneLabel(scene: MultiplayerScene): string {
+  if (scene === 'landing_page') {
+    return 'Landing page';
+  }
+
+  if (scene === 'matchmaking_lobby') {
+    return 'Matchmaking lobby';
+  }
+
+  if (scene === 'waiting_room') {
+    return 'Waiting room';
+  }
+
+  if (scene === 'round_result') {
+    return 'Round result';
+  }
+
+  if (scene === 'game_result') {
+    return 'Game result';
+  }
+
+  return 'Game play';
 }

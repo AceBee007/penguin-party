@@ -34,13 +34,13 @@ describe('App', () => {
     window.history.replaceState({}, '', '/');
   });
 
-  it('renders the multiplayer lobby by default', () => {
+  it('renders the multiplayer landing page by default', () => {
     render(<App />);
 
     expect(screen.getByRole('heading', { name: 'Penguin Party' })).toBeInTheDocument();
-    expect(screen.getByText('P2P party room')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Create room' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Join room' })).toBeInTheDocument();
+    expect(screen.getByText('Landing page')).toBeInTheDocument();
+    expect((screen.getByLabelText('Player name') as HTMLInputElement).value).toMatch(/^Player_[0-9a-f]{6}$/);
+    expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled();
   });
 
   it('renders the local verification game shell for local-test mode', () => {
