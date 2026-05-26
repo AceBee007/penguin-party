@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PixiDragStage, type StageDragStatus } from './PixiDragStage';
+import { PixiDragStage } from './PixiDragStage';
 import {
   CARD_COLOR_LABELS,
   buildStateHash,
@@ -37,11 +37,6 @@ import type {
   RoomMetadata,
 } from '../network/types';
 
-const INITIAL_DRAG_STATUS: StageDragStatus = {
-  selectedCard: 'Ready',
-  target: 'No target',
-};
-
 const PLAYER_NAME_STORAGE_KEY = 'penguin-party.playerName';
 const ROOM_LIST_POLL_MS = 1600;
 const LOBBY_NAME_RESERVATION_REFRESH_MS = 15 * 1000;
@@ -75,7 +70,6 @@ export function MultiplayerGame() {
   const [identity, setIdentity] = useState<NetworkIdentity | null>(null);
   const [game, setGame] = useState<GameSessionState | null>(null);
   const [peers, setPeers] = useState<PeerRuntimeView[]>([]);
-  const [dragStatus, setDragStatus] = useState<StageDragStatus>(INITIAL_DRAG_STATUS);
   const [playerName, setPlayerName] = useState(() => readStoredPlayerName());
   const [rejoinCode, setRejoinCode] = useState('');
   const [rooms, setRooms] = useState<RoomMetadata[]>([]);
@@ -505,7 +499,6 @@ export function MultiplayerGame() {
     setGame(null);
     setPeers([]);
     setHostPeerId(null);
-    setDragStatus(INITIAL_DRAG_STATUS);
     setNetworkStatus('idle');
     setScene('matchmaking_lobby');
     setMessage('Returned to matchmaking lobby.');
@@ -890,29 +883,6 @@ export function MultiplayerGame() {
           ) : null}
 
           <section className="play-area">
-            <div className="hud" aria-live="polite">
-              <div>
-                <span>Turn</span>
-                <strong data-active-player>{activePlayer?.displayName ?? 'Waiting'}</strong>
-              </div>
-              <div>
-                <span>Local</span>
-                <strong data-local-player>{identity.displayName}</strong>
-              </div>
-              <div>
-                <span>Role</span>
-                <strong data-local-role>{identity.role}</strong>
-              </div>
-              <div>
-                <span>Card</span>
-                <strong data-selected-card>{dragStatus.selectedCard}</strong>
-              </div>
-              <div>
-                <span>Hash</span>
-                <strong data-state-hash>{game?.stateHash ?? 'none'}</strong>
-              </div>
-            </div>
-
             <div className="stage-frame">
               {game ? (
                 <PixiDragStage
@@ -921,7 +891,6 @@ export function MultiplayerGame() {
                   game={game}
                   handPlayerId={localPlayerId}
                   legalMoves={legalMoves}
-                  onDragStatusChange={setDragStatus}
                   onPlayCard={handlePlayCard}
                 />
               ) : (
@@ -1050,7 +1019,6 @@ export function MultiplayerGame() {
     if (payload.type === 'event_committed') {
       gameRef.current = payload.snapshot;
       setGame(payload.snapshot);
-      setDragStatus(INITIAL_DRAG_STATUS);
       setMessage(`Committed event ${payload.eventSeq}; revision ${payload.revision}.`);
       return;
     }
@@ -1068,7 +1036,6 @@ export function MultiplayerGame() {
       ) {
         gameRef.current = payload.snapshot;
         setGame(payload.snapshot);
-        setDragStatus(INITIAL_DRAG_STATUS);
       }
 
       setNetworkStatus(`host rev ${payload.revision}`);
@@ -1223,7 +1190,6 @@ export function MultiplayerGame() {
       eventSeqRef.current += 1;
       gameRef.current = nextGame;
       setGame(nextGame);
-      setDragStatus(INITIAL_DRAG_STATUS);
       setMessage(`${currentGame.players.find((player) => player.playerId === playerId)?.displayName} played ${CARD_COLOR_LABELS[currentGame.cardsById[cardId].color]}.`);
 
       for (const peer of peersRef.current) {
@@ -1310,7 +1276,6 @@ export function MultiplayerGame() {
     eventSeqRef.current += 1;
     gameRef.current = nextGame;
     setGame(nextGame);
-    setDragStatus(INITIAL_DRAG_STATUS);
     setMessage(`Committed event ${eventSeqRef.current}; revision ${nextGame.revision}.`);
 
     for (const peer of peersRef.current) {

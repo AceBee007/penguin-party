@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { MultiplayerGame } from './components/MultiplayerGame';
-import { PixiDragStage, type StageDragStatus } from './components/PixiDragStage';
+import { PixiDragStage } from './components/PixiDragStage';
 import {
   CARD_COLOR_LABELS,
   createLocalGame,
@@ -13,11 +13,6 @@ import {
   startNextRound,
 } from './game/rules';
 import type { CardId, MoveTarget } from './game/types';
-
-const INITIAL_DRAG_STATUS: StageDragStatus = {
-  selectedCard: 'Ready',
-  target: 'No target',
-};
 
 export function App() {
   const mode = new URLSearchParams(window.location.search).get('mode');
@@ -32,7 +27,6 @@ export function App() {
 
 function LocalGame() {
   const [game, setGame] = useState(() => createLocalGame({ playerCount: 2, seed: 'goal-1-local' }));
-  const [dragStatus, setDragStatus] = useState<StageDragStatus>(INITIAL_DRAG_STATUS);
   const [message, setMessage] = useState('Drag a card to a highlighted pyramid slot.');
   const activePlayer = getActivePlayer(game);
   const activePlayerId = activePlayer?.playerId ?? null;
@@ -54,7 +48,6 @@ function LocalGame() {
           const result = playCard(currentGame, activePlayerId, cardId, target);
           const card = currentGame.cardsById[cardId];
           setMessage(`${currentGame.players.find((player) => player.playerId === activePlayerId)?.displayName} played ${CARD_COLOR_LABELS[card.color]}.`);
-          setDragStatus(INITIAL_DRAG_STATUS);
           return result.state;
         } catch (error) {
           setMessage(error instanceof Error ? error.message : 'Move rejected.');
@@ -72,13 +65,11 @@ function LocalGame() {
 
   const handleNextRound = useCallback(() => {
     setGame((currentGame) => startNextRound(currentGame));
-    setDragStatus(INITIAL_DRAG_STATUS);
     setMessage('Next round started.');
   }, []);
 
   const handleReset = useCallback(() => {
     setGame(createLocalGame({ playerCount: 2, seed: `local-${Date.now()}` }));
-    setDragStatus(INITIAL_DRAG_STATUS);
     setMessage('Started a new local verification game.');
   }, []);
 
@@ -130,31 +121,11 @@ function LocalGame() {
         </aside>
 
         <section className="play-area">
-          <div className="hud" aria-live="polite">
-            <div>
-              <span>Turn</span>
-              <strong data-active-player>{activePlayer?.displayName ?? 'Round over'}</strong>
-            </div>
-            <div>
-              <span>Card</span>
-              <strong data-selected-card>{dragStatus.selectedCard}</strong>
-            </div>
-            <div>
-              <span>Target</span>
-              <strong data-target-readout>{dragStatus.target}</strong>
-            </div>
-            <div>
-              <span>Hash</span>
-              <strong data-state-hash>{game.stateHash}</strong>
-            </div>
-          </div>
-
           <div className="stage-frame">
             <PixiDragStage
               activePlayerId={activePlayerId}
               game={game}
               legalMoves={legalMoves}
-              onDragStatusChange={setDragStatus}
               onPlayCard={handlePlayCard}
             />
           </div>

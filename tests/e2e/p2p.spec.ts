@@ -28,24 +28,24 @@ test('syncs one host move and one joiner move over WebRTC DataChannel', async ({
 
     await expect(peerA.page.locator('canvas')).toBeVisible();
     await expect(peerB.page.locator('canvas')).toBeVisible();
-    await expect(peerA.page.locator('[data-state-hash]')).not.toHaveText('none');
-    await expect(peerB.page.locator('[data-state-hash]')).not.toHaveText('none');
-    await expect(peerA.page.locator('[data-active-player]')).toHaveText(names[0]);
-    await expect(peerB.page.locator('[data-active-player]')).toHaveText(names[0]);
+    await expect.poll(() => getStateHash(peerA.page)).not.toBe('none');
+    await expect.poll(() => getStateHash(peerB.page)).not.toBe('none');
+    await expectActivePlayer(peerA.page, names[0]);
+    await expectActivePlayer(peerB.page, names[0]);
 
     await dragCard(peerA.page, 0);
     await expect(peerA.page.locator('[data-board-count]')).toHaveText('1');
     await expect(peerB.page.locator('[data-board-count]')).toHaveText('1');
-    await expect(peerA.page.locator('[data-active-player]')).toHaveText(names[1]);
-    await expect(peerB.page.locator('[data-active-player]')).toHaveText(names[1]);
-    await expect(peerB.page.locator('[data-state-hash]')).toHaveText(await peerA.page.locator('[data-state-hash]').innerText());
+    await expectActivePlayer(peerA.page, names[1]);
+    await expectActivePlayer(peerB.page, names[1]);
+    await expect.poll(() => getStateHash(peerB.page)).toBe(await getStateHash(peerA.page));
 
     await dragCard(peerB.page, -0.13);
     await expect(peerA.page.locator('[data-board-count]')).toHaveText('2');
     await expect(peerB.page.locator('[data-board-count]')).toHaveText('2');
-    await expect(peerA.page.locator('[data-active-player]')).toHaveText(names[0]);
-    await expect(peerB.page.locator('[data-active-player]')).toHaveText(names[0]);
-    await expect(peerB.page.locator('[data-state-hash]')).toHaveText(await peerA.page.locator('[data-state-hash]').innerText());
+    await expectActivePlayer(peerA.page, names[0]);
+    await expectActivePlayer(peerB.page, names[0]);
+    await expect.poll(() => getStateHash(peerB.page)).toBe(await getStateHash(peerA.page));
 
     expect(peerA.consoleErrors).toEqual([]);
     expect(peerB.consoleErrors).toEqual([]);
@@ -87,15 +87,15 @@ test('starts correctly after the waiting room host leaves', async ({ browser }, 
 
     await peerA.context.close();
 
-    await expect(peerB.page.locator('[data-local-role]')).toHaveText('host', { timeout: 15000 });
+    await expect.poll(() => getLocalRole(peerB.page), { timeout: 15000 }).toBe('host');
     await expect(peerB.page.locator('[data-player-count]')).toHaveText('2', { timeout: 15000 });
     await expect(peerC.page.locator('[data-player-count]')).toHaveText('2', { timeout: 15000 });
     await peerB.page.locator('[data-start-game]').click();
 
     await expect(peerB.page.locator('canvas')).toBeVisible();
     await expect(peerC.page.locator('canvas')).toBeVisible();
-    await expect(peerB.page.locator('[data-active-player]')).toHaveText(names[1]);
-    await expect(peerC.page.locator('[data-active-player]')).toHaveText(names[1]);
+    await expectActivePlayer(peerB.page, names[1]);
+    await expectActivePlayer(peerC.page, names[1]);
 
     await expectLocalPlayerHasMatchingGameState(peerB.page, names[1]);
     await expectLocalPlayerHasMatchingGameState(peerC.page, names[2]);
@@ -310,8 +310,8 @@ test('resumes a disconnected player with a re-join code', async ({ browser }, te
     await peerBResume.page.locator('[data-rejoin-code-input]').fill(rejoinCode);
     await peerBResume.page.getByRole('button', { name: 'Start' }).click();
 
-    await expect(peerBResume.page.locator('[data-local-player]')).toHaveText(names[1], { timeout: 15000 });
-    await expect(peerBResume.page.locator('[data-state-hash]')).not.toHaveText('none', { timeout: 30000 });
+    await expect.poll(() => getLocalPlayerName(peerBResume.page), { timeout: 15000 }).toBe(names[1]);
+    await expect.poll(() => getStateHash(peerBResume.page), { timeout: 30000 }).not.toBe('none');
     await expectLocalPlayerHasMatchingGameState(peerBResume.page, names[1]);
 
     expect(peerA.consoleErrors).toEqual([]);
@@ -344,15 +344,15 @@ test('host silently auto-plays for a disconnected active player', async ({ brows
     await joinRoomFromList(peerB.page, roomId);
     await expect(peerA.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
     await peerA.page.locator('[data-start-game]').click();
-    await expect(peerA.page.locator('[data-active-player]')).toHaveText(names[0]);
+    await expectActivePlayer(peerA.page, names[0]);
 
     await dragCard(peerA.page, 0);
     await expect(peerA.page.locator('[data-board-count]')).toHaveText('1');
-    await expect(peerA.page.locator('[data-active-player]')).toHaveText(names[1]);
+    await expectActivePlayer(peerA.page, names[1]);
     await peerB.context.close();
 
     await expect(peerA.page.locator('[data-board-count]')).toHaveText('2', { timeout: 25000 });
-    await expect(peerA.page.locator('[data-active-player]')).toHaveText(names[0]);
+    await expectActivePlayer(peerA.page, names[0]);
     const disconnectedPlayerRow = peerA.page.locator('.player-row').filter({ hasText: names[1] });
     await expect(disconnectedPlayerRow).not.toContainText(/closed|disconnected|reconnecting/i);
 
@@ -402,6 +402,50 @@ async function joinRoomFromList(page: Page, roomId: string) {
   const room = page.locator(`[data-room-item][data-room-code="${roomId}"]`);
   await expect(room).toBeVisible({ timeout: 10000 });
   await room.click();
+}
+
+async function expectActivePlayer(page: Page, expectedName: string) {
+  await expect.poll(() => getActivePlayerName(page)).toBe(expectedName);
+}
+
+async function getActivePlayerName(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as
+      | {
+          game?: {
+            currentRound?: { activePlayerId: string | null };
+            players: Array<{ playerId: string; displayName: string }>;
+          };
+        }
+      | undefined;
+    const activePlayerId = debug?.game?.currentRound?.activePlayerId ?? null;
+
+    return debug?.game?.players.find((player) => player.playerId === activePlayerId)?.displayName ?? 'none';
+  });
+}
+
+async function getLocalPlayerName(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as { identity?: { displayName: string } } | undefined;
+
+    return debug?.identity?.displayName ?? 'none';
+  });
+}
+
+async function getLocalRole(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as { identity?: { role: string } } | undefined;
+
+    return debug?.identity?.role ?? 'none';
+  });
+}
+
+async function getStateHash(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as { game?: { stateHash: string } } | undefined;
+
+    return debug?.game?.stateHash ?? 'none';
+  });
 }
 
 async function expectLocalPlayerHasMatchingGameState(page: Page, expectedName: string) {

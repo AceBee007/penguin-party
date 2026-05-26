@@ -23,12 +23,6 @@ interface PixiDragStageProps {
   canPlay?: boolean;
   legalMoves: LegalMove[];
   onPlayCard: (cardId: CardId, target: MoveTarget) => void;
-  onDragStatusChange: (status: StageDragStatus) => void;
-}
-
-export interface StageDragStatus {
-  selectedCard: string;
-  target: string;
 }
 
 interface CardLayout {
@@ -87,7 +81,6 @@ export function PixiDragStage({
   canPlay = true,
   legalMoves,
   onPlayCard,
-  onDragStatusChange,
 }: PixiDragStageProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const legalMoveKey = useMemo(() => serializeLegalMoves(legalMoves), [legalMoves]);
@@ -109,7 +102,6 @@ export function PixiDragStage({
       canPlay,
       legalMoves,
       onPlayCard,
-      onDragStatusChange,
       () => destroyed,
     ).then((createdApp) => {
       app = createdApp;
@@ -127,7 +119,7 @@ export function PixiDragStage({
         app = null;
       }
     };
-  }, [activePlayerId, canPlay, game, handPlayerId, legalMoveKey, legalMoves, onDragStatusChange, onPlayCard]);
+  }, [activePlayerId, canPlay, game, handPlayerId, legalMoveKey, legalMoves, onPlayCard]);
 
   return <div className="pixi-root" data-pixi-root ref={mountRef} />;
 }
@@ -139,7 +131,6 @@ async function startPixiGameStage(
   canPlay: boolean,
   legalMoves: LegalMove[],
   onPlayCard: (cardId: CardId, target: MoveTarget) => void,
-  onDragStatusChange: (status: StageDragStatus) => void,
   isDestroyed: () => boolean,
 ) {
   const app = new Application();
@@ -183,10 +174,6 @@ async function startPixiGameStage(
     const hovered = findNearestTarget(pointer.x, pointer.y, dragState.legalTargets, boardLayout);
 
     drawLegalTargets(targetLayer, boardLayout, dragState.legalTargets, hovered);
-    onDragStatusChange({
-      selectedCard: readableCardName(game, dragState.cardId),
-      target: hovered ? `L${hovered.level + 1} X${hovered.x}` : 'No target',
-    });
   });
   app.stage.on('pointerup', () => finishDrag());
   app.stage.on('pointerupoutside', () => finishDrag());
@@ -223,10 +210,6 @@ async function startPixiGameStage(
     drawHand(handLayer, dragLayer, boardLayout, game, handPlayerId, canPlay, legalMoves, (nextDragState) => {
       dragState = nextDragState;
       drawLegalTargets(targetLayer, boardLayout, dragState.legalTargets, null);
-      onDragStatusChange({
-        selectedCard: readableCardName(game, dragState.cardId),
-        target: 'Choose a highlighted slot',
-      });
     });
   }
 
@@ -248,10 +231,6 @@ async function startPixiGameStage(
       onPlayCard(cardId, target);
     } else {
       renderScene();
-      onDragStatusChange({
-        selectedCard: readableCardName(game, cardId),
-        target: 'Returned to hand',
-      });
     }
   }
 }
@@ -573,11 +552,6 @@ function findNearestTarget(
 
   const threshold = Math.max(layout.cardWidth * 0.82, 40);
   return best && best.distance <= threshold ? best.target : null;
-}
-
-function readableCardName(game: GameSessionState, cardId: CardId): string {
-  const card = game.cardsById[cardId];
-  return card ? `${CARD_COLOR_LABELS[card.color]} ${card.serial}` : cardId;
 }
 
 function ownerInitial(game: GameSessionState, playerId: PlayerId): string {

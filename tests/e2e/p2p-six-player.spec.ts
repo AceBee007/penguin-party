@@ -81,26 +81,23 @@ test('runs six player mesh, spectator join, locked room, room full, and host ele
     await peers[0].page.locator('[data-start-game]').click();
     await expectAll(peers, '[data-revision]', '1');
     await expectAll(peers, '[data-board-count]', '0');
-    await expectAll(peers, '[data-state-hash]', await peers[0].page.locator('[data-state-hash]').innerText());
+    await expectAllStateHash(peers, await getStateHash(peers[0].page));
 
     const offsets = [0, -0.13, 0.13, -0.25, 0.25, -0.36];
 
     for (let index = 0; index < peers.length; index += 1) {
-      await expectAll(peers, '[data-active-player]', peers[index].name);
+      await expectAllActivePlayer(peers, peers[index].name);
       await dragCard(peers[index].page, offsets[index]);
       await expectAll(peers, '[data-board-count]', String(index + 1));
-      await expectAll(peers, '[data-state-hash]', await peers[0].page.locator('[data-state-hash]').innerText());
+      await expectAllStateHash(peers, await getStateHash(peers[0].page));
     }
 
     await joinRoom(spectator.page, roomId, spectator.name, 'iceberg');
-    await expect(spectator.page.locator('[data-local-role]')).toHaveText('spectator', { timeout: 15000 });
+    await expect.poll(() => getLocalRole(spectator.page), { timeout: 15000 }).toBe('spectator');
     await expect(spectator.page.locator('[data-board-count]')).toHaveText('6', { timeout: 30000 });
     await expect(spectator.page.locator('[data-player-count]')).toHaveText('6', { timeout: 30000 });
     await expect(spectator.page.locator('[data-spectator-count]')).toHaveText('1', { timeout: 30000 });
-    await expect(spectator.page.locator('[data-state-hash]')).toHaveText(
-      await peers[0].page.locator('[data-state-hash]').innerText(),
-      { timeout: 30000 },
-    );
+    await expect.poll(() => getStateHash(spectator.page), { timeout: 30000 }).toBe(await getStateHash(peers[0].page));
 
     const spectatorDebug = await spectator.page.evaluate(() => {
       const debug = window.__PENGUIN_DEBUG__ as {
@@ -139,11 +136,11 @@ test('runs six player mesh, spectator join, locked room, room full, and host ele
     const newHostPeerId = await findElectedHostPeerId(remainingPlayers, oldHostPeerId);
 
     const electedHost = await findPeerByPeerId(remainingPlayers, newHostPeerId);
-    await expect(electedHost.page.locator('[data-local-role]')).toHaveText('host');
-    await expectAll(remainingPlayers, '[data-active-player]', electedHost.name);
+    await expect.poll(() => getLocalRole(electedHost.page)).toBe('host');
+    await expectAllActivePlayer(remainingPlayers, electedHost.name);
     await dragCard(electedHost.page, 0.36);
     await expectAll(remainingPlayers, '[data-board-count]', '7');
-    await expectAll(remainingPlayers, '[data-state-hash]', await electedHost.page.locator('[data-state-hash]').innerText());
+    await expectAllStateHash(remainingPlayers, await getStateHash(electedHost.page));
 
     for (const peer of [...remainingPlayers, rejectedPeer, spectator]) {
       expect(peer.consoleErrors).toEqual([]);
@@ -186,7 +183,55 @@ async function joinRoom(page: Page, roomId: string, name: string, password: stri
   await room.click();
   await page.locator('[data-join-password]').fill(password);
   await page.locator('[data-join-room-submit]').click();
-  await expect(page.locator('[data-local-player]')).toHaveText(name, { timeout: 15000 });
+  await expect.poll(() => getLocalPlayerName(page), { timeout: 15000 }).toBe(name);
+}
+
+async function expectAllActivePlayer(peers: Array<{ page: Page }>, expectedName: string) {
+  await Promise.all(peers.map((peer) => expect.poll(() => getActivePlayerName(peer.page)).toBe(expectedName)));
+}
+
+async function expectAllStateHash(peers: Array<{ page: Page }>, expectedHash: string) {
+  await Promise.all(peers.map((peer) => expect.poll(() => getStateHash(peer.page), { timeout: 30000 }).toBe(expectedHash)));
+}
+
+async function getActivePlayerName(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as
+      | {
+          game?: {
+            currentRound?: { activePlayerId: string | null };
+            players: Array<{ playerId: string; displayName: string }>;
+          };
+        }
+      | undefined;
+    const activePlayerId = debug?.game?.currentRound?.activePlayerId ?? null;
+
+    return debug?.game?.players.find((player) => player.playerId === activePlayerId)?.displayName ?? 'none';
+  });
+}
+
+async function getLocalPlayerName(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as { identity?: { displayName: string } } | undefined;
+
+    return debug?.identity?.displayName ?? 'none';
+  });
+}
+
+async function getLocalRole(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as { identity?: { role: string } } | undefined;
+
+    return debug?.identity?.role ?? 'none';
+  });
+}
+
+async function getStateHash(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as { game?: { stateHash: string } } | undefined;
+
+    return debug?.game?.stateHash ?? 'none';
+  });
 }
 
 async function dragCard(page: Page, targetXOffsetRatio: number) {

@@ -18,7 +18,8 @@ test('renders the local Pixi game and commits a drag/drop move', async ({ page }
   await expect(page.getByRole('heading', { name: 'Penguin Party' })).toBeVisible();
   await expect(page.getByText('Local verification mode')).toBeVisible();
   await expect(page.locator('canvas')).toBeVisible();
-  await expect(page.locator('[data-active-player]')).toHaveText('You');
+  await expect(page.locator('.hud')).toHaveCount(0);
+  await expect(page.locator('.player-row[data-active="true"] strong')).toHaveText('You');
   await expect(page.locator('[data-board-count]')).toHaveText('0');
 
   const canvas = page.locator('canvas');
@@ -45,8 +46,7 @@ test('renders the local Pixi game and commits a drag/drop move', async ({ page }
   await page.mouse.up();
 
   await expect(page.locator('[data-board-count]')).toHaveText('0');
-  await expect(page.locator('[data-active-player]')).toHaveText('You');
-  await expect(page.locator('[data-target-readout]')).toHaveText('Returned to hand');
+  await expect(page.locator('.player-row[data-active="true"] strong')).toHaveText('You');
   await expect.poll(() => getStageCounts(page)).toEqual({
     handCards: 18,
     handLayerChildren: 18,
@@ -63,11 +63,10 @@ test('renders the local Pixi game and commits a drag/drop move', async ({ page }
   await page.mouse.move(canvasBox.x + validMove.startX, canvasBox.y + validMove.startY);
   await page.mouse.down();
   await page.mouse.move(canvasBox.x + validMove.endX, canvasBox.y + validMove.endY, { steps: 12 });
-  await expect(page.locator('[data-target-readout]')).not.toHaveText('No target');
   await page.mouse.up();
 
   await expect(page.locator('[data-board-count]')).toHaveText('1');
-  await expect(page.locator('[data-active-player]')).toHaveText('Player 2');
+  await expect(page.locator('.player-row[data-active="true"] strong')).toHaveText('Player 2');
   await expect(page.locator('[data-revision]')).not.toHaveText('1');
 
   expect(consoleErrors).toEqual([]);

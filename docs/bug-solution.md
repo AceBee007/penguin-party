@@ -8,7 +8,7 @@
 
 ## 原因
 
-- `waiting-canvas` に `min-height: min(360px, 68vh)` が指定されているため、親の `stage-frame` が `hud` と `action-bar` を差し引いた残り高さまで縮んだ場合でも、子要素側が親より高くなれる。
+- `waiting-canvas` に `min-height: min(360px, 68vh)` が指定されているため、親の `stage-frame` が小画面レイアウト内で縮んだ場合でも、子要素側が親より高くなれる。
 - Pixi の手札配置は常に1列で、狭い viewport では spacing を圧縮しても必要幅が `pixi-root` の表示幅を超える。
 - 既存の board geometry は縦方向の縮小を考慮していたが、手札が複数行になる場合の縦方向予約を持っていなかった。
 
