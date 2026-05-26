@@ -325,6 +325,8 @@ export function playCard(game: GameSessionState, playerId: PlayerId, cardId: Car
     throw new Error('Card is not in player hand.');
   }
 
+  assertCardCanMoveFromHandToBoard(round, player, cardId, target);
+
   const legalMoves = getLegalMovesForPlayer(game, playerId);
   const isLegal = legalMoves.some((move) => move.cardId === cardId && sameTarget(move.target, target));
 
@@ -759,6 +761,34 @@ function placeCardOnBoard(board: BoardState, card: BoardCardState): BoardState {
     baseMinX: card.level === 0 ? Math.min(board.baseMinX ?? card.x, card.x) : board.baseMinX,
     baseMaxX: card.level === 0 ? Math.max(board.baseMaxX ?? card.x, card.x) : board.baseMaxX,
   };
+}
+
+function assertCardCanMoveFromHandToBoard(
+  round: RoundState,
+  player: RoundPlayerState,
+  cardId: CardId,
+  target: MoveTarget,
+): void {
+  const targetKey = cellKey(target.level, target.x);
+
+  if (round.board.cardsByCell[targetKey]) {
+    throw new Error('Target cell is already occupied.');
+  }
+
+  if (Object.values(round.board.cardsByCell).some((card) => card.cardId === cardId)) {
+    throw new Error('Card is already on board.');
+  }
+
+  if (Object.values(round.players).some((candidate) => candidate.playedCardIds.includes(cardId))) {
+    throw new Error('Card was already played.');
+  }
+
+  const handOwners = Object.values(round.players).filter((candidate) => candidate.handCardIds.includes(cardId));
+  const handCopies = player.handCardIds.filter((candidate) => candidate === cardId).length;
+
+  if (handCopies !== 1 || handOwners.length !== 1 || handOwners[0].playerId !== player.playerId) {
+    throw new Error('Card ownership is inconsistent.');
+  }
 }
 
 function getCardsPerPlayer(playerCount: number): number {

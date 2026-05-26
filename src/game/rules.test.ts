@@ -110,6 +110,55 @@ describe('Penguin Party rules', () => {
     expect(result.stateHash).not.toBe(game.stateHash);
   });
 
+  it('rejects a move when card ownership is duplicated in hand state', () => {
+    const game = createLocalGame({ playerCount: 2, seed: 'duplicate-hand' });
+    const firstMove = getLegalMovesForPlayer(game, 'player-1')[0];
+    const duplicated = {
+      ...game,
+      currentRound: {
+        ...game.currentRound!,
+        players: {
+          ...game.currentRound!.players,
+          'player-1': {
+            ...game.currentRound!.players['player-1'],
+            handCardIds: [firstMove.cardId, ...game.currentRound!.players['player-1'].handCardIds],
+            remainingCardCount: game.currentRound!.players['player-1'].remainingCardCount + 1,
+          },
+        },
+      },
+    };
+
+    expect(() => playCard(duplicated, 'player-1', firstMove.cardId, firstMove.target)).toThrow(
+      'Card ownership is inconsistent.',
+    );
+  });
+
+  it('rejects a move when the same card is already on the board', () => {
+    const game = createLocalGame({ playerCount: 2, seed: 'duplicate-board' });
+    const firstMove = getLegalMovesForPlayer(game, 'player-1')[0];
+    const afterFirstMove = playCard(game, 'player-1', firstMove.cardId, firstMove.target).state;
+    const corrupted = {
+      ...afterFirstMove,
+      currentRound: {
+        ...afterFirstMove.currentRound!,
+        activePlayerId: 'player-1',
+        players: {
+          ...afterFirstMove.currentRound!.players,
+          'player-1': {
+            ...afterFirstMove.currentRound!.players['player-1'],
+            status: 'active' as const,
+            handCardIds: [firstMove.cardId, ...afterFirstMove.currentRound!.players['player-1'].handCardIds],
+            remainingCardCount: afterFirstMove.currentRound!.players['player-1'].remainingCardCount + 1,
+          },
+        },
+      },
+    };
+
+    expect(() => playCard(corrupted, 'player-1', firstMove.cardId, { level: 0, x: 1 })).toThrow(
+      'Card is already on board.',
+    );
+  });
+
   it('scores blocked players by remaining cards and finished players with a two-point reduction', () => {
     let game = createLocalGame({ playerCount: 2, seed: 'scoring-test' });
 

@@ -9,6 +9,7 @@ import {
 } from 'pixi.js';
 import { CARD_COLOR_LABELS, getCurrentRoundPlayer, sameTarget } from '../game/rules';
 import type { CardColor, CardId, GameSessionState, LegalMove, MoveTarget, PlayerId } from '../game/types';
+import { getVisualBoardX } from './boardGeometry';
 
 interface PixiDragStageProps {
   game: GameSessionState;
@@ -203,6 +204,9 @@ async function startPixiGameStage(
     targetLayer.removeChildren();
     boardLayer.removeChildren();
     handLayer.removeChildren();
+    if (!dragState) {
+      dragLayer.removeChildren();
+    }
     drawBoard(boardLayer, boardLayout, game);
     drawHand(handLayer, dragLayer, boardLayout, game, handPlayerId, canPlay, legalMoves, (nextDragState) => {
       dragState = nextDragState;
@@ -222,9 +226,11 @@ async function startPixiGameStage(
     const boardLayout = createBoardLayout(app.screen.width, app.screen.height, game, legalMoves);
     const target = findNearestTarget(dragState.container.x, dragState.container.y, dragState.legalTargets, boardLayout);
     const cardId = dragState.cardId;
+    const draggedContainer = dragState.container;
 
     dragState = null;
     targetLayer.removeChildren();
+    draggedContainer.parent?.removeChild(draggedContainer);
 
     if (target) {
       onPlayCard(cardId, target);
@@ -391,6 +397,8 @@ function drawHand(
 
   window.__PENGUIN_STAGE_DEBUG__ = {
     handCards: stageDebugCards,
+    handLayerChildren: handLayer.children.length,
+    dragLayerChildren: dragLayer.children.length,
   };
 }
 
@@ -464,8 +472,8 @@ function createBoardLayout(width: number, height: number, game: GameSessionState
   const cardHeight = cardWidth * 1.28;
   const board = game.currentRound?.board;
   const xValues = [
-    ...(board?.occupiedCellKeys.map((key) => board.cardsByCell[key].x) ?? []),
-    ...legalMoves.map((move) => move.target.x),
+    ...(board?.occupiedCellKeys.map((key) => getVisualBoardX(board.cardsByCell[key])) ?? []),
+    ...legalMoves.map((move) => getVisualBoardX(move.target)),
     0,
   ];
   const minX = Math.min(...xValues);
@@ -487,7 +495,7 @@ function createBoardLayout(width: number, height: number, game: GameSessionState
 
 function getCardLayoutForTarget(layout: BoardLayout, target: MoveTarget): CardLayout {
   return {
-    centerX: layout.originX + target.x * layout.gapX,
+    centerX: layout.originX + getVisualBoardX(target) * layout.gapX,
     centerY: layout.baseY - target.level * layout.rowRise,
     width: layout.cardWidth,
     height: layout.cardHeight,
