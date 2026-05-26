@@ -189,6 +189,7 @@ interface GamePlayerState {
 
   connectionStatus: ConnectionStatus;
   ready: boolean;
+  rejoinCodeExpiresAt?: number;
 
   totalPenalty: number;
   roundsStarted: number[];
@@ -212,6 +213,59 @@ interface RoundPlayerState {
 
 プレイヤーには、表示名、席順、接続状態、累積失点、手札、そのラウンドで出したカード、脱落状態、出し切り状態、そのラウンドで増減した失点を保持させます。
 合法手一覧やボード座標キャッシュは毎回計算できるため、保存せず derived data として扱います。
+
+### Waiting room 中の参加・退出再計算
+
+`waiting_room` 中は、room に参加している player の集合がゲーム開始時の正です。
+ゲーム開始前に任意の player が参加・退出した場合、host は開始前状態を毎回再計算します。
+
+再計算対象:
+
+- 現在の player 一覧
+- current host
+- `playerId`
+- `seatIndex`
+- `seatingOrder`
+- `startingPlayerOrder`
+- 各 player の `ready`
+- ゲーム開始ボタンの有効可否
+
+離脱済み player は `GameSessionState.players`、`seatingOrder`、配札対象、開始プレイヤー順に含めません。
+host が `waiting_room` 中に離脱した場合、残存 player から新 host を選び、新 host が残存 player だけで開始用 snapshot を作ります。
+古い host や離脱済み player の `playerId`、seat、hand が新しい開始 snapshot に残ってはいけません。
+これにより、3人 room から host が離脱して2人 room になっても、残った2人が正常に手札を持ってゲームを開始できます。
+
+### Online player name の一意性
+
+同時に online の player display name は重複を許可しません。
+Landing page の `Start`、room 作成、room 参加の各タイミングで、signaling server または room management layer が display name の一意性を検証します。
+重複がある場合、新規 player として `matchmaking_lobby` へ進ませません。
+
+re-join code で復帰する場合は例外です。
+その場合は入力された display name を無視し、re-join code に紐づく既存 player の display name を再利用します。
+
+### Re-join code
+
+player が room / game に参加した時点で、server はランダムな re-join code を自動生成します。
+re-join code は player identity に紐づく secret であり、通常 UI では他 player に見せません。
+有効期限は生成から3時間です。
+
+```ts
+interface RejoinIdentity {
+  rejoinCode: string;
+  playerId: PlayerId;
+  roomId: string;
+  gameId: GameId | null;
+  displayName: string;
+  issuedAt: number;
+  expiresAt: number;
+  consumedAt: number | null;
+}
+```
+
+re-join code が有効で、対象 game が進行中または復帰可能な状態なら、同じ `playerId`、`displayName`、seat、private hand を再割り当てして resume します。
+re-join code で復帰する場合、landing page で入力された player name は使いません。
+期限切れ、存在しない、または終了済み game の re-join code は拒否します。
 
 ## 6. カードデータ
 
@@ -362,7 +416,10 @@ type PeerCommand =
       type: 'join_waiting_room';
       gameId: GameId;
       displayName: string;
-      reconnectToken?: string;
+    }
+  | {
+      type: 'resume_game';
+      rejoinCode: string;
     }
   | { type: 'set_ready'; ready: boolean }
   | { type: 'start_game' }
@@ -380,6 +437,7 @@ type HostMessage =
   | { type: 'snapshot'; state: ClientGameView }
   | { type: 'command_rejected'; actionId?: string; reason: string }
   | { type: 'player_presence_changed'; playerId: PlayerId; status: ConnectionStatus }
+  | { type: 'player_resumed'; playerId: PlayerId }
   | { type: 'round_started'; roundIndex: number }
   | { type: 'action_resolved'; action: ResolvedAction; state: ClientGameView }
   | { type: 'round_ended'; summary: RoundSummary; state: ClientGameView }
@@ -413,7 +471,7 @@ interface PrivatePlayerView {
   selfPlayerId: PlayerId;
   hand: CardInstance[];
   legalMoves?: LegalMove[];
-  reconnectToken?: string;
+  rejoinCode?: string;
 }
 ```
 
@@ -421,6 +479,27 @@ UI 表示用の `ClientGameView` に含めるべきでないものは、他プ�
 spectator の `privateState` は `null` とし、手札、山札順、配札順、非公開乱数 seed を含めません。
 ただし、ホスト切断後にゲームを継続するための P2P 複製状態では、`docs/network-spec.md` に従って完全なゲーム情報を player peer が保持する場合があります。
 その場合でも、UI はローカルプレイヤー以外の手札を表示してはいけません。
+
+### Game play 中の player 切断と host 代行
+
+`game_play` 中に non-host player が connection 切断または room 退出した場合でも、通常 UI ではその切断を他 player に表示しません。
+他 player には、その player が通常どおり game に残っているように見せます。
+ただし内部状態では `connectionStatus` を `reconnecting` または `disconnected` として保持し、re-join code による復帰を受け付けます。
+
+切断 player の手番が来た場合、current host は次の順序で処理します。
+
+1. 5秒 + 0〜3秒の random jitter を待つ
+2. その間に player が re-join した場合、通常の player input を待つ
+3. 待機後も切断状態なら、host が切断 player の private hand から合法手を計算する
+4. 合法手がある場合、ランダムに1つの card / target を選び、切断 player 本人の `play_card` と同じ event として commit する
+5. 合法手がない場合、通常の no-move resolve と同じ event として commit する
+
+host 代行であることは public event に含めません。
+online player へは通常の `action_resolved` / `event_committed` として送ります。
+デバッグログや host-only state にだけ、代行実行であることを記録してよいです。
+
+host 自身が切断した場合は、まず host election / host migration を完了します。
+新 host は旧 host から複製済みの完全 snapshot を使い、同じ待機・代行ルールを継続します。
 
 ## 11. ホスト権威 peer が持っておくと便利なもの
 
@@ -430,7 +509,13 @@ spectator の `privateState` は `null` とし、手札、山札順、配札順�
 interface HostAuthorityState {
   hostPeerId: string;
   hostEpoch: number;
-  reconnectSecrets: Record<PlayerId, string>;
+  rejoinCodesByPlayerId: Record<PlayerId, string>;
+  rejoinIdentitiesByCode: Record<string, RejoinIdentity>;
+  pendingAutoMovesByPlayerId: Record<PlayerId, {
+    scheduledAt: number;
+    executeAfter: number;
+    reason: 'connection_lost' | 'room_left';
+  }>;
   lastCommandIdsByPlayer: Record<PlayerId, string | null>;
   eventLog: GameEvent[];
   lastCommittedRevision: number;

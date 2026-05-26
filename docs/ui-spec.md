@@ -38,6 +38,7 @@ type AppScene =
 type AppDialog =
   | 'create_room'
   | 'join_password'
+  | 'rejoin_error'
   | 'leave_room_confirm'
   | 'connection_error'
   | null;
@@ -74,6 +75,9 @@ interface ConnectionIndicatorView {
 }
 ```
 
+`game_play` 中は、他 player の切断を通常 UI に出さないため、`peerCount` / `connectedPeerCount` を player ごとの離脱表示として使ってはいけません。
+表示してよいのは、自分自身の signaling / P2P 接続品質、または room 全体の抽象的な通信状態だけです。
+
 実装メモ:
 
 - アイコンは `lucide-react` を導入する場合、`Wifi`, `WifiOff`, `Signal` 系を使う
@@ -86,12 +90,14 @@ interface ConnectionIndicatorView {
 
 起動直後に表示する最初の画面です。
 ゲームタイトル、プレイヤー名設定、「Start」ボタンだけを表示し、room 一覧は表示しません。
+プレイ中 game へ復帰するため、プレイヤー名入力の下に re-join code 入力欄も表示します。
 
 ### レイアウト
 
 ```txt
 Penguin Party
 [Player_a3f91c____________]
+[re-join code_____________]
 
 [Start]
 ```
@@ -122,11 +128,43 @@ Validation:
 - 名前は必須
 - 名前は空白だけを禁止
 - 名前は最大16文字
+- 同時に online の player と同じ名前は使えない
 - invalid の場合、`Start` ボタンを disabled にする
+- 名前重複が検出された場合、`Start` は失敗し、Landing page にエラーを表示して `matchmaking_lobby` へ遷移しない
 
 ### 操作
 
 - `Start`: プレイヤー名が valid なら `matchmaking_lobby` へ遷移する
+- re-join code が入力されている場合、`Start` は名前ではなく re-join code による resume を優先する
+- re-join code resume が成功した場合、保存済み player name、playerId、手札、手番状態で `game_play` へ遷移する
+- re-join code resume が失敗した場合、Landing page にエラーを表示し、入力中の player name は変更しない
+
+### Re-join code 入力
+
+進行中 game から切断された player が、同じ player として復帰するための入力欄です。
+
+```ts
+interface RejoinCodeInputView {
+  value: string;
+  isSubmitting: boolean;
+  error:
+    | 'invalid_rejoin_code'
+    | 'expired_rejoin_code'
+    | 'game_already_finished'
+    | 'room_closed'
+    | null;
+}
+```
+
+表示ルール:
+
+- player name 入力欄の下に表示する
+- placeholder は `re-join code` とする
+- 任意入力にする
+- re-join code が空欄の場合、通常の player name flow を使う
+- re-join code が入力済みの場合、player name の値は resume 判定に使わない
+- resume 成功後、UI 上の player name は server が返した以前の display name に置き換える
+- re-join code は secret なので、他 player の画面、room list、waiting room、game play には表示しない
 
 ## 5. Matchmaking Lobby
 
@@ -268,7 +306,7 @@ interface CreateRoomFormState {
 
 パスワード
 [________________]
-パスワードを入力すると、このルームはプライベートルームになります。
+パスワードを入力すると、このルームは鍵付きルームになります。
 
 [作成] [戻る]
 ```
@@ -291,7 +329,7 @@ const hasPassword = password.trim().length > 0;
 パスワード欄の下に、常に次のヒントを表示します。
 
 ```txt
-パスワードを入力すると、このルームはプライベートルームになります。
+パスワードを入力すると、このルームは鍵付きルームになります。
 ```
 
 パスワードが入力済みの場合は、より明確に次の表示へ切り替えてもよいです。
@@ -345,8 +383,22 @@ Validation:
 - 名前は必須
 - 名前は空白だけを禁止
 - 名前は最大16文字
+- 同時に online の player と同じ名前は使えない
 - invalid の場合は入力欄の近くに短いエラーを表示する
 - invalid の場合、`Start` ボタンを disabled にする
+- 名前重複エラーの場合、`matchmaking_lobby` へ遷移せず、Landing page に留まる
+
+```ts
+type PlayerNameError =
+  | 'required'
+  | 'too_long'
+  | 'duplicate_online_name'
+  | null;
+```
+
+名前重複の最終判定は server 側で行います。
+client 側の事前チェックが成功しても、server が `duplicate_online_name` を返した場合は Landing page に戻してエラーを表示します。
+re-join code で復帰する場合は、入力中の player name を使わず、server が返した既存 display name を採用します。
 
 ## 8. Join Password Dialog
 
@@ -364,7 +416,7 @@ matchmaking lobby で鍵アイコン付き room をクリックした直後に�
 ```txt
 パスワードが必要です
 
-このルームはプライベートルームです。
+このルームは鍵付きルームです。
 
 パスワード
 [________________]
@@ -458,6 +510,24 @@ Validation:
 - 最大6人まで参加可能
 - host 以外はゲーム開始できない
 
+### 参加・退出時の再計算
+
+`waiting_room` 中は、参加中 player の集合がゲーム開始時の正になります。
+任意の player が参加・退出した時点で、UI は server / current host から更新された room snapshot を受け取り、表示を再構成します。
+
+更新対象:
+
+- player list
+- host badge
+- player count
+- start button の enabled / disabled
+- player の表示順
+- local player の `playerId` / role / host 権限
+
+host が `waiting_room` 中に退出した場合、残存 player のうち新 host になった player だけに「ゲーム開始」ボタンを表示します。
+離脱済み player は waiting room の表示、player count、ゲーム開始時の配札対象に残してはいけません。
+新 host がゲーム開始した場合、残存 player 全員が手札を持ち、自分の手番でプレイできる必要があります。
+
 ## 10. Game Play
 
 ### 目的
@@ -513,7 +583,7 @@ Validation:
 - 各プレイヤーの表示名
 - 各プレイヤーの残りカード枚数
 - 各プレイヤーの脱落または上がり状態
-- 現在ラウンド、現在手番、スコア、接続状態
+- 現在ラウンド、現在手番、スコア
 
 観戦者に表示してはいけない情報:
 
@@ -524,6 +594,32 @@ Validation:
 操作:
 
 - `退出`: spectator として room から退出し、matchmaking lobby へ戻る
+
+### Game play 中の切断表示と host 代行
+
+`game_play` 中に player の connection が切断された場合でも、他の online player と spectator の通常画面には、その player の切断状態を表示しません。
+他の user からは、その player が通常どおり game に残っているように見せます。
+
+表示ルール:
+
+- 切断 player を gray out しない
+- 切断 badge、reconnecting badge、offline label を他 user に表示しない
+- 他 player の残り手札数、得点、手番表示は通常どおり表示する
+- host が代行 play したことを示す文言や icon を表示しない
+- 自分自身が切断・再接続中の場合だけ、自分の画面に reconnecting / resumed status を表示してよい
+
+host 代行の UI 挙動:
+
+- 切断 player の手番では、通常の手番待ち表示を続ける
+- host が 5秒 + 0〜3秒の待機後に代行 action を commit したら、通常の player action と同じ animation / message で反映する
+- 合法手がない場合も、通常の no-move resolve と同じ表示にする
+- 代行実行であることは debug overlay や開発ログに限定し、通常 UI には出さない
+
+re-join 成功時:
+
+- re-join した player の画面は、以前の display name、playerId、hand、現在の turn / board / score を復元して表示する
+- 他 player の画面では、特別な「復帰しました」通知を必須にしない
+- 復帰 player が active player なら、host 代行 timer をキャンセルし、通常入力を受け付ける
 
 ## 11. プレイ済みカード領域
 
@@ -774,7 +870,18 @@ interface FinalStandingView {
 1. 起動時に `landing_page` を表示する
 2. プレイヤー名を確認または編集する
 3. `Start` を押す
-4. `matchmaking_lobby` へ遷移し、現在 open している room list を表示する
+4. server が online player name の重複を検証する
+5. 重複がなければ `matchmaking_lobby` へ遷移し、現在 open している room list を表示する
+6. 重複があれば Landing page に留まり、名前重複エラーを表示する
+
+### Re-join code で resume
+
+1. 起動時に `landing_page` を表示する
+2. re-join code 入力欄に code を入力する
+3. `Start` を押す
+4. server が re-join code の存在、有効期限、対象 game の復帰可否を検証する
+5. 成功したら、入力中の player name を無視し、以前の display name / playerId / hand で `game_play` へ遷移する
+6. 失敗したら Landing page に留まり、re-join code エラーを表示する
 
 ### 鍵なし room 作成
 
@@ -823,6 +930,27 @@ interface FinalStandingView {
 10. ラウンド終了後、毎回 `round_result` へ遷移する
 11. 最終ラウンドではない場合、「次のラウンド」で `game_play` へ戻る
 12. 最終ラウンドの場合、`game_result` として表示し、「もう一度遊ぶ」を表示する
+
+### Waiting room 中の host 退出
+
+1. Player 1 が host として room を作成する
+2. Player 2 と Player 3 が参加する
+3. Player 1 がゲーム開始前に退出する
+4. Player 2 が新 host に昇格する
+5. waiting room は Player 2 / Player 3 の2人だけで再描画される
+6. Player 2 の画面だけに「ゲーム開始」ボタンを表示する
+7. Player 2 がゲーム開始する
+8. Player 2 と Player 3 の両方に手札が配られ、どちらも自分の手番でプレイできる
+
+### Game play 中の player 切断
+
+1. game play 中に任意の player が connection 切断または room 退出する
+2. 他の online player 画面では、その player は通常どおり残っているように表示する
+3. 切断 player の手番になったら、host は 5秒 + 0〜3秒の待機を開始する
+4. 待機中に re-join した場合、その player の通常入力へ戻る
+5. 待機後も切断中なら、host が切断 player の手札から合法手を選んで commit する
+6. 合法手がない場合は通常の no-move resolve として commit する
+7. 他 player 画面には通常 action として反映し、host 代行であることを表示しない
 
 ### ゲーム中の途中参加
 
@@ -896,6 +1024,12 @@ PixiJS 側は `BoardView` と `LocalHandView` の描画・ドラッグ操作に�
 - spectator は場のピラミッドと各プレイヤーのカード所持数だけを見られる
 - spectator は各プレイヤーの手札の色やカード内容を見られない
 - spectator 画面の右上には「退出」ボタンを表示する
+- online player name は同時重複不可
+- re-join code は player 参加時に server が自動生成し、有効期限は3時間
+- re-join code で resume する場合、入力中の player name は無視し、以前の display name を使う
+- `waiting_room` 中の参加・退出では player list / host / seating / start 可否を再計算する
+- game play 中の他 player 切断は通常 UI には表示しない
+- game play 中に切断 player の手番が来た場合、host は 5秒 + 0〜3秒後に通常 action として代行 commit する
 
 ### 追加で決めたいこと
 
