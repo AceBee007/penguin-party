@@ -127,7 +127,7 @@ player 上限は6人ですが、ゲーム中の途中参加は spectator とし�
 - 各手が全 player peer に同期され、spectator には公開状態として同期される
 - player peer 間で `revision` と完全 snapshot の `stateHash` が一致する
 - spectator は host が送った spectator snapshot の `revision` と公開状態 hash に追いつく
-- lobby 中の7人目の player 参加を `room_full` として拒否する
+- `waiting_for_start` 中の7人目の player 参加を `room_full` として拒否する
 - playing 中の7人目以降の参加は spectator として許可する
 - spectator は `playerId: null` とし、手札、山札順、配札順、非公開乱数 seed を受け取らない
 - spectator は各 player のカード所持数と場のピラミッドだけをリアルタイムに見られる
@@ -142,7 +142,7 @@ player 上限は6人ですが、ゲーム中の途中参加は spectator とし�
 - Peer B: 最初の参加者
 - Peer C: late join と3人同期確認
 - Peer D/E/F: 6人 full room 確認
-- 7人目 player: lobby 中の room full rejection 確認
+- 7人目 player: `waiting_for_start` 中の room full rejection 確認
 - 7人目以降 spectator: playing 中の観戦参加と redacted snapshot 確認
 
 ### 完了条件
@@ -157,7 +157,7 @@ player 上限は6人ですが、ゲーム中の途中参加は spectator とし�
 - 6人全員が最低1回、代表的な gameplay action を実行できる
 - すべての action 後に全 player peer の `revision` と完全 snapshot の `stateHash` が一致する
 - spectator は同じ `revision` の公開状態を表示し、spectator snapshot hash が host と一致する
-- lobby 中の7人目 player join が拒否される
+- `waiting_for_start` 中の7人目 player join が拒否される
 - playing 中の7人目以降の join が spectator として成功する
 - spectator は `playerId: null` で、host election と quorum に含まれない
 - spectator の local state に `privateStateByPlayerId`, `hostOnlyStateReplica`, 山札順、各 player の手札 cardId が存在しない
@@ -184,4 +184,4 @@ player 上限は6人ですが、ゲーム中の途中参加は spectator とし�
 - 通信と multiplayer state に迷った場合は `docs/network-spec.md` を正とする
 - UI 表示に迷った場合は `docs/ui-spec.md` を正とする
 - マルチプレイ通信は current host authoritative を正とする
-- ローカル Node.js server は room/lobby/signaling のみを担当する
+- ローカル Node.js server は room list / room management / signaling のみを担当する

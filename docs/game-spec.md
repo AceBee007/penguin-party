@@ -27,7 +27,7 @@
 
 - ゲームルールの正状態は、UI とは切り離した純粋データとして持つ
 - マルチプレイでは現在のゲームホストを authoritative にする
-- ローカル Node.js サーバーは room/lobby/signaling のみを担当し、ゲームルールの正状態は持たない
+- ローカル Node.js サーバーは room list / room management / signaling のみを担当し、ゲームルールの正状態は持たない
 - UI 用の選択状態やアニメーション状態は、ゲーム状態とは別に持つ
 - UI では他人の手札を公開しない
 - ホスト交代に備えた P2P 複製状態の扱いは `docs/network-spec.md` を優先する
@@ -98,7 +98,7 @@ interface GameSessionState {
 ```
 
 `GameStatus.waiting_room` はゲーム開始前の待機状態です。
-signaling server の `RoomMetadata.status` は `docs/network-spec.md` に合わせて `lobby` / `playing` を使い、UI scene と game session status では `waiting_room` と呼びます。
+signaling server の `RoomMetadata.status` は `docs/network-spec.md` に合わせて `waiting_for_start` / `playing` を使い、UI scene と game session status では `waiting_room` と呼びます。
 
 ### `GameSessionState` に含めるべきもの
 
@@ -351,7 +351,7 @@ UI 状態には、選択中カード、ハイライト中の置き場所、モ�
 - 非ホスト peer は「意図」を current host に送る
 - current host は「検証済み結果」を全 peer に broadcast する
 - host 自身の入力も同じ command validation path に通す
-- ローカル Node.js サーバーは signaling/lobby 専用で、ゲームコマンドを検証しない
+- ローカル Node.js サーバーは signaling / room list 専用で、ゲームコマンドを検証しない
 - UI では他プレイヤーの手札を見せず、`remainingCardCount` だけを表示する
 - ホスト交代に必要な完全複製状態の扱いは `docs/network-spec.md` を優先する
 - 小規模ゲームなので、アクション確定後にイベントとスナップショットを送る方式で十分
@@ -521,7 +521,7 @@ function applyRoundSummary(game: GameSessionState, summary: RoundSummary): GameS
 - UI は `selectedCardId` と `highlightedTargets` を分離する
 - 他人の手札は `remainingCardCount` だけ見せる
 - current host は `play_card` command を受け取って合法性を検証する
-- ローカル Node.js サーバーは `play_card` を検証せず、room/lobby/signaling のみに使う
+- ローカル Node.js サーバーは `play_card` を検証せず、room list / room management / signaling のみに使う
 - ラウンド終了後は `RoundSummary` に圧縮し、現在ラウンドの詳細は破棄可能にする
 - 乱数は `randomSeed` を持ち、配札を再現できるようにする
 

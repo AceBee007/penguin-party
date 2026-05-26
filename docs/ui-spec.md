@@ -137,7 +137,7 @@ Validation:
 ### レイアウト
 
 matchmaking lobby は、現在 open しているすべての room を一覧表示します。
-room は `lobby` または `playing` のものだけを表示します。
+room は `waiting_for_start` または `playing` のものだけを表示します。
 誰もいなくなった room は signaling server が自動削除し、room list には表示しません。
 viewport の最下部には、常に floating の大きな「新しいゲームルームを作成」ボタンを表示します。
 ボタンは画面幅に応じて中央寄せまたは横幅いっぱいに近い形で表示し、ルーム一覧のスクロールに追従せず viewport に固定します。
@@ -194,7 +194,7 @@ interface RoomListItemView {
   currentPlayerCount: number;
   currentSpectatorCount: number;
   maxPlayers: 6;
-  status: 'lobby' | 'playing';
+  status: 'waiting_for_start' | 'playing';
   canJoin: boolean;
   joinRole: 'player' | 'spectator' | null;
 }
@@ -205,13 +205,13 @@ interface RoomListItemView {
 - パスワードなし room は鍵アイコンなし
 - パスワード付き room はルーム名の左、または右端に鍵アイコンを表示する
 - 鍵アイコンには「パスワードあり」の意味が伝わる `aria-label` を付ける
-- `status === 'lobby'` は「開始待ち」と表示する
+- `status === 'waiting_for_start'` は「開始待ち」と表示する
 - `status === 'playing'` は「プレイ中」と表示する
 - `canJoin === false` のルームは disabled 表示にする
 - `status === 'playing'` のルームは観戦者として参加できる
 - `status === 'playing'` のルームには「観戦」または spectator badge を表示する
 - `currentPlayerCount >= maxPlayers` のルームは満員表示にする
-- `status === 'lobby'` かつ `currentPlayerCount >= maxPlayers` のルームは player として参加できない
+- `status === 'waiting_for_start'` かつ `currentPlayerCount >= maxPlayers` のルームは player として参加できない
 - 満員でも `status === 'playing'` の場合は spectator として参加可能にしてよい
 - `closed` status は持たない。参加者が0人になった room は自動削除され、一覧から消える
 
@@ -232,11 +232,11 @@ viewport 最下部に floating 表示します。
 1. パスワードなし room の場合は、そのまま参加処理を実行する
 2. パスワード付き room の場合だけ `join_password` dialog を表示する
 3. パスワードが正しければ次の画面へ遷移する
-4. パスワードが不正なら dialog 内にエラーを表示し、lobby に留まる
+4. パスワードが不正なら dialog 内にエラーを表示し、matchmaking lobby に留まる
 
 遷移先:
 
-- `status === 'lobby'`: player として `waiting_room` へ遷移する
+- `status === 'waiting_for_start'`: player として `waiting_room` へ遷移する
 - `status === 'playing'`: spectator として `game_play` へ遷移する
 
 ## 6. Create Room Dialog
@@ -383,9 +383,10 @@ Validation:
 - パスワードは最大20文字
 - パスワード未入力では `参加` ボタンを disabled
 - パスワードエラー時は dialog 内にエラーを表示し、dialog は閉じない
+- `room_closed` は、パスワード入力中に対象 room の参加者が0人になって自動削除された場合などに表示する
 
 ```ts
-type JoinPasswordError = 'password_required' | 'invalid_password' | 'room_full' | null;
+type JoinPasswordError = 'password_required' | 'invalid_password' | 'room_closed' | 'room_full' | null;
 ```
 
 ## 9. Waiting Room
@@ -444,7 +445,7 @@ interface WaitingRoomPlayerView {
 
 #### ルームを退出
 
-クリックすると、確認 dialog を表示してから lobby へ戻ります。
+クリックすると、確認 dialog を表示してから matchmaking lobby へ戻ります。
 
 #### ゲーム開始
 
@@ -795,14 +796,14 @@ interface FinalStandingView {
 ### 鍵なし room 参加
 
 1. landing page で設定したプレイヤー名が valid であることを確認する
-2. matchmaking lobby で `status === 'lobby'` のパスワードなし room をクリックする
+2. matchmaking lobby で `status === 'waiting_for_start'` のパスワードなし room をクリックする
 3. そのまま参加処理を実行する
 4. player として waiting room へ遷移する
 
 ### 鍵付き room 参加
 
 1. landing page で設定したプレイヤー名が valid であることを確認する
-2. matchmaking lobby で `status === 'lobby'` の鍵アイコン付き room をクリックする
+2. matchmaking lobby で `status === 'waiting_for_start'` の鍵アイコン付き room をクリックする
 3. `join_password` dialog が表示される
 4. パスワードを入力する
 5. 「参加」を押す
@@ -878,12 +879,12 @@ PixiJS 側は `BoardView` と `LocalHandView` の描画・ドラッグ操作に�
 
 ### 確定事項
 
-- room は `lobby` と `playing` の2状態だけを持つ
+- room は `waiting_for_start` と `playing` の2状態だけを持つ
 - 参加者が0人になった room は自動削除され、room list には表示しない
 - 鍵付き room も matchmaking lobby の room list に表示する
 - 鍵付き room は鍵アイコン付きで表示する
 - player は最大6人
-- lobby 中の7人目 player join は拒否する
+- `waiting_for_start` 中の7人目 player join は拒否する
 - playing 中の7人目以降の join は spectator として許可する
 - ルーム名は最大32文字
 - プレイヤー名は最大16文字

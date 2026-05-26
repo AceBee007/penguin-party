@@ -20,7 +20,7 @@
 ### 仕様の優先順位
 
 マルチプレイ通信は、`docs/game-spec.md` とこの文書の両方で「current host authoritative」に統一します。
-ローカル Node.js server は room/lobby/signaling のみを担当し、ゲームルールの正状態は持ちません。
+ローカル Node.js server は room list / room management / signaling のみを担当し、ゲームルールの正状態は持ちません。
 
 仕様の参照優先順位は次の通りです。
 
@@ -56,7 +56,7 @@
 - ゲームロジックをホスト 1 人に集約する
 - ホスト以外の player peer も完全な状態を複製し、ホスト切断時にゲームを継続できるようにする
 - spectator peer は観戦用の公開状態だけを受け取り、host migration には参加しない
-- ローカル Node.js サーバーを中央集権的なゲームサーバーではなく、軽量な signaling/lobby サーバーとして使う
+- ローカル Node.js サーバーを中央集権的なゲームサーバーではなく、軽量な room list / signaling サーバーとして使う
 - 鍵なし room と鍵付き room をサポートする
 - Playwright MCP で Peer A/B/C および最大 Peer F までの検証を行いやすい通信設計にする
 
@@ -204,14 +204,14 @@ interface RoomMetadata {
   currentSpectatorCount: number;
   maxPlayers: 6;
 
-  status: 'lobby' | 'playing';
+  status: 'waiting_for_start' | 'playing';
   hasPassword: boolean;
 }
 ```
 
 room status:
 
-- `lobby`: room はゲーム開始待ちで、player として参加できる
+- `waiting_for_start`: room はゲーム開始待ちで、player として参加できる
 - `playing`: room はゲーム進行中です。round result / game result 表示中も `playing` として扱い、途中参加者は spectator になる
 - `closed` は持たない。参加 peer が0人になった room は signaling server が自動削除し、room list から消える
 
@@ -226,7 +226,7 @@ room status:
 - 鍵付き room も room list に表示する
 - room list には `roomId`, `roomName`, `hasPassword`, `currentPlayerCount`, `currentSpectatorCount`, `maxPlayers`, `status` を含める
 - 鍵付き room への join は、player と spectator のどちらでもパスワードを必須にする
-- room が `lobby` の場合、パスワード検証後に player として join できる
+- room が `waiting_for_start` の場合、パスワード検証後に player として join できる
 - room が `playing` の場合、パスワード検証後に spectator として join できる
 - パスワードが設定されている場合、signaling server が検証する
 - signaling server は平文パスワードを保存しない
@@ -923,7 +923,7 @@ interface HostHandoff {
 
 ### Late join
 
-room が `lobby` の間に Peer C 以降が参加した場合、その peer は player として参加します。
+room が `waiting_for_start` の間に Peer C 以降が参加した場合、その peer は player として参加します。
 
 1. signaling server が既存 peer 一覧を返す
 2. 新 peer と既存 peer が full mesh 接続を作る
@@ -989,12 +989,13 @@ sequenceDiagram
 
 ```ts
 interface JoinRoomError {
-  code: 'room_full' | 'password_required' | 'invalid_password';
+  code: 'room_full' | 'password_required' | 'invalid_password' | 'room_closed';
   message: string;
 }
 ```
 
-`room_full` は、`status === 'lobby'` で player として参加しようとしたときに `currentPlayerCount >= maxPlayers` の場合だけ返します。
+`room_full` は、`status === 'waiting_for_start'` で player として参加しようとしたときに `currentPlayerCount >= maxPlayers` の場合だけ返します。
+`room_closed` は、参加者が0人になって room が自動削除された後や、パスワード入力中に対象 room が閉じられた後に join しようとした場合に返します。
 `status === 'playing'` の room では、7人目以上でも player ではなく spectator として参加を許可します。
 鍵付き room の場合も、spectator join にはパスワード検証を必須にします。
 
@@ -1153,7 +1154,7 @@ P2P の動作確認では、少なくとも Peer A、Peer B、Peer C を別々�
 
 ### Peer C late join flow
 
-1. Peer A/B が接続済みで、room が `lobby` の状態を作る
+1. Peer A/B が接続済みで、room が `waiting_for_start` の状態を作る
 2. Peer C が同じ room に player として参加する
 3. Peer C が Peer A/B とそれぞれ DataChannel open になる
 4. current host が Peer C に snapshot を送る
@@ -1194,7 +1195,7 @@ P2P の動作確認では、少なくとも Peer A、Peer B、Peer C を別々�
 4. 6人全員に一意な `PlayerId` と席順が割り当てられる
 5. ゲーム開始後、各 peer が少なくとも1回代表的な操作を行う
 6. 全 player peer の `revision` と完全 snapshot の `stateHash` が一致する
-7. lobby 中の7人目の player join が `room_full` で拒否される
+7. `waiting_for_start` 中の7人目の player join が `room_full` で拒否される
 8. playing 中の7人目以降の join は spectator として許可され、`playerId: null` になる
 9. spectator は6人 player の full mesh と host election quorum に含まれない
 10. spectator の `revision` と spectator snapshot hash が host の公開状態と一致する
