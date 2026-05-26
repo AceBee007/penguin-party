@@ -571,7 +571,8 @@ host が `waiting_room` 中に退出した場合、残存 player のうち新 ho
 - local player の四角だけ player name を表示する
 - local player の文字は bold の黒文字にする
 - local player 以外の四角は player name を表示せず、白い四角として表示する
-- active player の四角だけ、約1秒周期で青系のグラデーション明暗アニメーションを行う
+- active player の四角だけ、2秒周期の青系グラデーション明暗アニメーションを行う
+- active player の明暗変化は、0秒で白、1秒で青、2秒で白に戻り、同じ周期を繰り返す
 - compact scoreboard の一番右に、展開を意味する矢印または三角アイコンを表示する
 - 展開アイコンには `aria-expanded` を付ける
 

@@ -143,8 +143,18 @@ test('uses compact mobile scoreboard and confirms leaving during game play', asy
 
     const activeAnimation = await peerA.page
       .locator('[data-compact-player][data-active="true"]')
-      .evaluate((node) => window.getComputedStyle(node).animationName);
-    expect(activeAnimation).toContain('active-scoreboard-glow');
+      .evaluate((node) => {
+        const style = window.getComputedStyle(node);
+
+        return {
+          duration: style.animationDuration,
+          iterationCount: style.animationIterationCount,
+          name: style.animationName,
+        };
+      });
+    expect(activeAnimation.name).toContain('active-scoreboard-glow');
+    expect(activeAnimation.duration).toBe('2s');
+    expect(activeAnimation.iterationCount).toBe('infinite');
 
     await peerA.page.locator('[data-scoreboard-toggle]').click();
     await expect(peerA.page.locator('[data-scoreboard-overlay]')).toBeVisible();

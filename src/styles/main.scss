@@ -220,7 +220,7 @@ button {
   }
 
   &[data-active="true"] {
-    animation: active-scoreboard-glow 1s ease-in-out infinite alternate;
+    animation: active-scoreboard-glow 2s ease-in-out infinite;
     border-color: rgba(47, 128, 237, 0.74);
   }
 
@@ -316,7 +316,7 @@ button {
   width: 24px;
   height: 14px;
   border-radius: 3px;
-  animation: active-scoreboard-glow 1s ease-in-out infinite alternate;
+  animation: active-scoreboard-glow 2s ease-in-out infinite;
 }
 
 .scoreboard-overlay__players {
@@ -336,7 +336,7 @@ button {
   background: #ffffff;
 
   &[data-active="true"] {
-    animation: active-scoreboard-glow 1s ease-in-out infinite alternate;
+    animation: active-scoreboard-glow 2s ease-in-out infinite;
     border-color: rgba(47, 128, 237, 0.74);
   }
 
@@ -360,13 +360,14 @@ button {
 }
 
 @keyframes active-scoreboard-glow {
-  from {
-    background: linear-gradient(135deg, #ffffff 0%, #d9ebff 100%);
+  0%,
+  100% {
+    background: linear-gradient(135deg, #ffffff 0%, #ffffff 100%);
     box-shadow: 0 0 0 rgba(47, 128, 237, 0);
   }
 
-  to {
-    background: linear-gradient(135deg, #f5fbff 0%, #6bb6ff 100%);
+  50% {
+    background: linear-gradient(135deg, #eaf6ff 0%, #2f80ed 100%);
     box-shadow: 0 0 12px rgba(47, 128, 237, 0.36);
   }
 }
