@@ -8,9 +8,32 @@ For PixiJS API reference, read `docs/pixijs/llms.txt` for short and quick instru
 
 Write styles in SCSS.
 
+## Sub-Agent Lifecycle
+
+Treat most sub-agents as task-scoped.
+The Git Steward is the exception: keep one Git Steward sub-agent up for the repository or thread and reuse it for Git state management across tasks.
+
+The implementation agent should:
+- Spawn a sub-agent only for a concrete task with a clear expected output.
+- Wait for the sub-agent's final report before considering that delegated task complete.
+- For non-Git sub-agents, after the final report is received and any useful output is integrated or recorded, close the sub-agent when the platform supports explicit closing.
+- For non-Git sub-agents, if the platform does not provide an explicit close operation, consider the sub-agent retired after its final report and do not reuse it for a new task.
+- For non-Git sub-agents, start a new sub-agent for each separate task instead of continuing an old completed sub-agent.
+- For the Git Steward, reuse the same active sub-agent for status checks, staging advice, commit preparation, branch checks, and commit execution.
+- If no Git Steward is currently active, spawn one before the next Git-managed operation and keep it active for later Git work.
+- Do not close the Git Steward after each task. Close or retire it only when the repository work is finished, the thread ends, or the user explicitly asks to close it.
+- Do not leave completed sub-agents pending as implicit owners of future work.
+
+Each sub-agent should:
+- Return a concise final report when its assigned task is complete.
+- Include blockers, changed files, commands run, and verification results when relevant.
+- Avoid starting follow-up work unless the implementation agent explicitly assigns a new task.
+
 ## Sub-Agent: Git Steward
 
 For every coding task, delegate Git state management to a Git Steward sub-agent.
+Unlike other sub-agents, the Git Steward should stay active and be reused across tasks in this repository.
+Use a single long-lived Git Steward per repository or thread whenever the platform supports it.
 
 The Git Steward should:
 - Check `git status --short` before editing and before finishing.
@@ -22,6 +45,7 @@ The Git Steward should:
 - Avoid destructive commands such as `git reset --hard`, `git checkout --`, or force pushes unless the user explicitly requests them.
 - Review staged files before commit with `git diff --staged`.
 - Report the final branch name, changed files, and commit hash when a commit is created.
+- Stay available for follow-up Git checks and commits until explicitly closed or retired.
 
 Default workflow:
 1. Inspect repository state with `git status --short`.
