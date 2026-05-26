@@ -559,6 +559,53 @@ host が `waiting_room` 中に退出した場合、残存 player のうち新 ho
 4. 他プレイヤー手札数表示領域
 5. 現在手番、ラウンド、スコアなどの補助情報
 
+### 小画面用 compact scoreboard
+
+`game_play` 中に viewport 幅または高さが小さい場合、通常の scoreboard は大きすぎるため、約20px高の compact section に縮小します。
+この compact section には player 数ぶんの小さい四角を横並びで表示し、各四角が1人の player を表します。
+
+表示ルール:
+
+- compact scoreboard は `game_play` 中の小画面でのみ通常 scoreboard の代わりに表示する
+- 四角は player 数と同じ数だけ表示し、spectator は含めない
+- local player の四角だけ player name を表示する
+- local player の文字は bold の黒文字にする
+- local player 以外の四角は player name を表示せず、白い四角として表示する
+- active player の四角だけ、約1秒周期で青系のグラデーション明暗アニメーションを行う
+- compact scoreboard の一番右に、展開を意味する矢印または三角アイコンを表示する
+- 展開アイコンには `aria-expanded` を付ける
+
+展開時:
+
+- 展開アイコンをクリックすると、overlay の expanded scoreboard を表示する
+- overlay には room name、player name 一覧、現在の score、現在 active player を示す明暗変化のヒントを表示する
+- overlay 内の player 行でも active player は同じ青系の明暗アニメーションで示す
+- 同じ展開アイコンまたは overlay 内の閉じるアイコンをもう一度クリックすると、expanded scoreboard を閉じる
+
+```ts
+interface CompactScoreboardPlayerView {
+  playerId: string;
+  displayName: string;
+  isLocal: boolean;
+  isActive: boolean;
+  totalPenalty: number;
+  remainingCardCount: number;
+}
+```
+
+### Game play 中の退出
+
+`game_play` 中に `Leave` を押した場合、すぐに退出せず確認 dialog を表示します。
+
+確認 dialog:
+
+- title は game から退出することがわかる文言にする
+- primary action は退出確定
+- secondary action はキャンセル
+- キャンセルした場合は dialog を閉じ、game play に留まる
+- 退出を確定した場合は現在の game room から退出し、Landing page ではなく `matchmaking_lobby` へ戻る
+- `matchmaking_lobby` へ戻った後は player name reservation を更新し、room list を再取得する
+
 ### Spectator 表示
 
 ゲーム中に途中参加した spectator は、現在の盤面と各プレイヤーの公開状態だけをリアルタイムに閲覧できます。

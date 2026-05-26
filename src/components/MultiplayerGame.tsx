@@ -61,6 +61,15 @@ interface RoomListItemView extends RoomMetadata {
   joinRole: 'player' | 'spectator' | null;
 }
 
+interface ScoreboardPlayerView {
+  playerId: PlayerId;
+  displayName: string;
+  isActive: boolean;
+  isLocal: boolean;
+  remainingCardCount: number;
+  totalPenalty: number;
+}
+
 export function MultiplayerGame() {
   const [scene, setScene] = useState<MultiplayerScene>('landing_page');
   const [identity, setIdentity] = useState<NetworkIdentity | null>(null);
@@ -72,6 +81,8 @@ export function MultiplayerGame() {
   const [rooms, setRooms] = useState<RoomMetadata[]>([]);
   const [isRoomListLoading, setIsRoomListLoading] = useState(false);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isLeaveConfirmOpen, setIsLeaveConfirmOpen] = useState(false);
+  const [isScoreboardExpanded, setIsScoreboardExpanded] = useState(false);
   const [passwordRoom, setPasswordRoom] = useState<RoomListItemView | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [joiningRoomId, setJoiningRoomId] = useState<string | null>(null);
@@ -91,6 +102,7 @@ export function MultiplayerGame() {
   const eventSeqRef = useRef(0);
   const autoPlayTimeoutRef = useRef<number | null>(null);
   const autoPlayScheduleRef = useRef<{ playerId: PlayerId; revision: number } | null>(null);
+  const lastRoomLeaveAtRef = useRef(0);
   const trimmedPlayerName = playerName.trim();
   const trimmedRejoinCode = rejoinCode.trim();
   const isPlayerNameValid = trimmedPlayerName.length > 0 && trimmedPlayerName.length <= 16;
@@ -285,6 +297,39 @@ export function MultiplayerGame() {
 
     return 'waiting_room';
   }, [game, identity, scene]);
+  const scoreboardPlayers = useMemo<ScoreboardPlayerView[]>(() => {
+    if (game) {
+      return game.players.map((player) => {
+        const roundPlayer = game.currentRound?.players[player.playerId];
+
+        return {
+          playerId: player.playerId,
+          displayName: player.displayName,
+          isActive: player.playerId === activePlayer?.playerId,
+          isLocal: player.playerId === localPlayerId,
+          remainingCardCount: roundPlayer?.remainingCardCount ?? 0,
+          totalPenalty: player.totalPenalty,
+        };
+      });
+    }
+
+    return peers
+      .filter((peer) => peer.role !== 'spectator' && peer.playerId)
+      .map((peer) => ({
+        playerId: peer.playerId ?? peer.peerId,
+        displayName: peer.displayName,
+        isActive: false,
+        isLocal: peer.peerId === identity?.peerId,
+        remainingCardCount: 0,
+        totalPenalty: 0,
+      }));
+  }, [activePlayer?.playerId, game, identity?.peerId, localPlayerId, peers]);
+
+  useEffect(() => {
+    if (currentScene !== 'game_play') {
+      setIsScoreboardExpanded(false);
+    }
+  }, [currentScene]);
 
   const startMesh = useCallback((nextIdentity: NetworkIdentity) => {
     meshRef.current?.close();
@@ -447,6 +492,9 @@ export function MultiplayerGame() {
   }, [handleJoinRoom]);
 
   const handleLeaveRoom = useCallback(() => {
+    lastRoomLeaveAtRef.current = Date.now();
+    setIsLeaveConfirmOpen(false);
+    setIsScoreboardExpanded(false);
     meshRef.current?.close();
     meshRef.current = null;
     identityRef.current = null;
@@ -466,6 +514,15 @@ export function MultiplayerGame() {
       void refreshNameReservation(trimmedPlayerName);
     }
   }, [isPlayerNameValid, refreshOpenRooms, trimmedPlayerName]);
+
+  const handleLeaveClick = useCallback(() => {
+    if (gameRef.current) {
+      setIsLeaveConfirmOpen(true);
+      return;
+    }
+
+    handleLeaveRoom();
+  }, [handleLeaveRoom]);
 
   const handleStartGame = useCallback(() => {
     const currentIdentity = identityRef.current;
@@ -745,6 +802,32 @@ export function MultiplayerGame() {
               <span>Room <strong data-room-id>{identity.room.roomId}</strong></span>
               <strong data-channel-state>{connectedPeerCount > 1 ? 'Open' : 'Connecting'}</strong>
             </div>
+            <div className="scoreboard-compact" data-compact-scoreboard>
+              <div className="scoreboard-compact__players">
+                {scoreboardPlayers.map((player) => (
+                  <div
+                    className="scoreboard-compact__player"
+                    aria-label={player.isLocal ? `${player.displayName} You` : player.isActive ? 'Active player' : 'Player'}
+                    data-active={player.isActive}
+                    data-compact-player
+                    data-local={player.isLocal}
+                    key={player.playerId}
+                  >
+                    {player.isLocal ? <span>{player.displayName}</span> : null}
+                  </div>
+                ))}
+              </div>
+              <button
+                className="scoreboard-toggle"
+                aria-expanded={isScoreboardExpanded}
+                aria-label={isScoreboardExpanded ? 'Collapse scoreboard' : 'Expand scoreboard'}
+                data-scoreboard-toggle
+                type="button"
+                onClick={() => setIsScoreboardExpanded((expanded) => !expanded)}
+              >
+                <span aria-hidden="true" />
+              </button>
+            </div>
             <div className="player-list">
               {peers.map((peer) => (
                 <div className="player-row" data-active={peer.playerId === activePlayer?.playerId} key={peer.peerId}>
@@ -759,6 +842,52 @@ export function MultiplayerGame() {
               ))}
             </div>
           </aside>
+
+          {isScoreboardExpanded && currentScene === 'game_play' ? (
+            <div className="scoreboard-overlay" data-scoreboard-overlay>
+              <section
+                className="scoreboard-overlay__panel"
+                aria-label="Expanded scoreboard"
+                aria-modal="false"
+                role="dialog"
+              >
+                <div className="scoreboard-overlay__header">
+                  <div>
+                    <span>Room</span>
+                    <strong>{identity.room.roomName}</strong>
+                  </div>
+                  <button
+                    className="scoreboard-toggle scoreboard-toggle--open"
+                    aria-expanded="true"
+                    aria-label="Collapse scoreboard"
+                    type="button"
+                    onClick={() => setIsScoreboardExpanded(false)}
+                  >
+                    <span aria-hidden="true" />
+                  </button>
+                </div>
+                <div className="scoreboard-overlay__hint" data-active-scoreboard-hint>
+                  <span className="scoreboard-overlay__hint-block" />
+                  <span>Active player</span>
+                </div>
+                <div className="scoreboard-overlay__players">
+                  {scoreboardPlayers.map((player) => (
+                    <div
+                      className="scoreboard-overlay__player"
+                      data-active={player.isActive}
+                      data-local={player.isLocal}
+                      data-scoreboard-player={player.playerId}
+                      key={player.playerId}
+                    >
+                      <span>{player.displayName}</span>
+                      <span>{player.remainingCardCount} cards</span>
+                      <strong>{player.totalPenalty} pts</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+          ) : null}
 
           <section className="play-area">
             <div className="hud" aria-live="polite">
@@ -810,7 +939,7 @@ export function MultiplayerGame() {
                     Start game
                   </button>
                 ) : null}
-                <button type="button" onClick={handleLeaveRoom}>
+                <button type="button" onClick={handleLeaveClick}>
                   Leave
                 </button>
               </div>
@@ -873,6 +1002,23 @@ export function MultiplayerGame() {
             ) : null}
           </aside>
         </section>
+      ) : null}
+
+      {isLeaveConfirmOpen ? (
+        <div className="dialog-backdrop">
+          <div className="dialog-card" aria-labelledby="leave-room-title" aria-modal="true" role="dialog">
+            <h2 id="leave-room-title">Leave game?</h2>
+            <p>You will leave this room and return to matchmaking.</p>
+            <div className="dialog-actions">
+              <button data-confirm-leave-room type="button" onClick={handleLeaveRoom}>
+                Leave
+              </button>
+              <button className="button-secondary" type="button" onClick={() => setIsLeaveConfirmOpen(false)}>
+                Stay
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </main>
   );
@@ -1189,6 +1335,14 @@ export function MultiplayerGame() {
       const reservation = await validatePlayerName(displayName, nameReservationTokenRef.current ?? undefined);
       nameReservationTokenRef.current = reservation.nameReservationToken;
     } catch (error) {
+      if (Date.now() - lastRoomLeaveAtRef.current < 2500) {
+        setMessage('Returned to matchmaking lobby. Refreshing player name.');
+        window.setTimeout(() => {
+          void refreshNameReservation(displayName);
+        }, 500);
+        return;
+      }
+
       setMessage(error instanceof Error ? error.message : 'Player name is unavailable.');
       releaseCurrentNameReservation();
       setScene('landing_page');

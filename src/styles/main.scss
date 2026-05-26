@@ -188,6 +188,189 @@ button {
   }
 }
 
+.scoreboard-compact {
+  display: none;
+}
+
+.scoreboard-compact__players {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.scoreboard-compact__player {
+  display: grid;
+  min-width: 18px;
+  height: 20px;
+  flex: 1 1 0;
+  place-items: center;
+  overflow: hidden;
+  color: #17313a;
+  border: 1px solid rgba(23, 49, 58, 0.18);
+  border-radius: 3px;
+  background: #ffffff;
+
+  &[data-local="true"] {
+    min-width: 68px;
+    flex-grow: 2;
+    color: #000000;
+    font-weight: 900;
+  }
+
+  &[data-active="true"] {
+    animation: active-scoreboard-glow 1s ease-in-out infinite alternate;
+    border-color: rgba(47, 128, 237, 0.74);
+  }
+
+  span {
+    min-width: 0;
+    overflow: hidden;
+    padding: 0 4px;
+    font-size: 11px;
+    line-height: 1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.scoreboard-toggle {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  border-radius: 4px;
+
+  span {
+    width: 0;
+    height: 0;
+    border-top: 7px solid #17313a;
+    border-right: 5px solid transparent;
+    border-left: 5px solid transparent;
+  }
+
+  &[aria-expanded="true"] span {
+    border-top: 0;
+    border-bottom: 7px solid #17313a;
+  }
+}
+
+.scoreboard-overlay {
+  display: none;
+}
+
+.scoreboard-overlay__panel {
+  display: grid;
+  gap: 10px;
+  width: min(420px, calc(100vw - 20px));
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  padding: 12px;
+  color: #17313a;
+  border: 1px solid rgba(23, 49, 58, 0.18);
+  border-radius: 8px;
+  background: #fffaf0;
+  box-shadow: 0 18px 46px rgba(23, 49, 58, 0.24);
+}
+
+.scoreboard-overlay__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+
+  div {
+    display: grid;
+    min-width: 0;
+  }
+
+  span {
+    color: #5c6f75;
+    font-size: 11px;
+    font-weight: 900;
+    text-transform: uppercase;
+  }
+
+  strong {
+    overflow: hidden;
+    font-size: 17px;
+    font-weight: 900;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.scoreboard-overlay__hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #41555b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.scoreboard-overlay__hint-block {
+  width: 24px;
+  height: 14px;
+  border-radius: 3px;
+  animation: active-scoreboard-glow 1s ease-in-out infinite alternate;
+}
+
+.scoreboard-overlay__players {
+  display: grid;
+  gap: 6px;
+}
+
+.scoreboard-overlay__player {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 32px;
+  padding: 7px 8px;
+  border: 1px solid rgba(23, 49, 58, 0.12);
+  border-radius: 6px;
+  background: #ffffff;
+
+  &[data-active="true"] {
+    animation: active-scoreboard-glow 1s ease-in-out infinite alternate;
+    border-color: rgba(47, 128, 237, 0.74);
+  }
+
+  &[data-local="true"] span:first-child {
+    color: #000000;
+    font-weight: 900;
+  }
+
+  span,
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong {
+    font-weight: 900;
+  }
+}
+
+@keyframes active-scoreboard-glow {
+  from {
+    background: linear-gradient(135deg, #ffffff 0%, #d9ebff 100%);
+    box-shadow: 0 0 0 rgba(47, 128, 237, 0);
+  }
+
+  to {
+    background: linear-gradient(135deg, #f5fbff 0%, #6bb6ff 100%);
+    box-shadow: 0 0 12px rgba(47, 128, 237, 0.36);
+  }
+}
+
 .player-list {
   display: grid;
   gap: 8px;
@@ -710,6 +893,44 @@ button {
   .game-shell {
     grid-template-columns: 1fr;
     grid-template-rows: auto minmax(min(360px, 68vh), 68vh) auto;
+  }
+
+  .game-shell[data-scene="game_play"] {
+    grid-template-rows: 28px minmax(min(360px, 68vh), 68vh) auto;
+
+    .scoreboard {
+      height: 28px;
+      min-height: 0;
+      overflow: visible;
+      border-radius: 6px;
+    }
+
+    .scoreboard__header,
+    .player-list {
+      display: none;
+    }
+
+    .scoreboard-compact {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 6px;
+      align-items: center;
+      height: 100%;
+      padding: 3px 4px;
+    }
+
+    .scoreboard-overlay {
+      position: fixed;
+      inset: 72px 10px auto;
+      z-index: 16;
+      display: grid;
+      justify-items: center;
+      pointer-events: none;
+    }
+
+    .scoreboard-overlay__panel {
+      pointer-events: auto;
+    }
   }
 
   .scoreboard,

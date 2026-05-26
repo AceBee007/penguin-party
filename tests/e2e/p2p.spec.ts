@@ -112,6 +112,71 @@ test('starts correctly after the waiting room host leaves', async ({ browser }, 
   }
 });
 
+test('uses compact mobile scoreboard and confirms leaving during game play', async ({ browser }, testInfo) => {
+  const names = peerNames('MobileUI', testInfo.project.name, 2);
+  const peerA = await openPeer(browser, { width: 390, height: 700 });
+  const peerB = await openPeer(browser, { width: 390, height: 700 });
+
+  try {
+    await peerA.page.goto('/');
+    await peerB.page.goto('/');
+
+    await enterMatchmaking(peerA.page, names[0]);
+    await enterMatchmaking(peerB.page, names[1]);
+    await createRoom(peerA.page);
+    const roomId = (await peerA.page.locator('[data-room-id]').textContent())?.trim();
+
+    if (!roomId) {
+      throw new Error('Peer A did not create a room code.');
+    }
+
+    await joinRoomFromList(peerB.page, roomId);
+    await expect(peerA.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
+    await peerA.page.locator('[data-start-game]').click();
+    await expect(peerA.page.locator('canvas')).toBeVisible();
+
+    await expect(peerA.page.locator('[data-compact-scoreboard]')).toBeVisible();
+    await expect(peerA.page.locator('[data-compact-player]')).toHaveCount(2);
+    await expect(peerA.page.locator('[data-compact-player][data-local="true"]')).toContainText(names[0]);
+    await expect(peerA.page.locator('[data-compact-player][data-local="false"]')).not.toContainText(names[1]);
+    await expect(peerA.page.locator('[data-compact-player][data-active="true"]')).toHaveCount(1);
+
+    const activeAnimation = await peerA.page
+      .locator('[data-compact-player][data-active="true"]')
+      .evaluate((node) => window.getComputedStyle(node).animationName);
+    expect(activeAnimation).toContain('active-scoreboard-glow');
+
+    await peerA.page.locator('[data-scoreboard-toggle]').click();
+    await expect(peerA.page.locator('[data-scoreboard-overlay]')).toBeVisible();
+    await expect(peerA.page.locator('[data-scoreboard-overlay]')).toContainText('Penguin Table');
+    await expect(peerA.page.locator('[data-scoreboard-overlay]')).toContainText(names[0]);
+    await expect(peerA.page.locator('[data-scoreboard-overlay]')).toContainText(names[1]);
+    await expect(peerA.page.locator('[data-active-scoreboard-hint]')).toContainText('Active player');
+
+    await peerA.page.getByLabel('Collapse scoreboard').last().click();
+    await expect(peerA.page.locator('[data-scoreboard-overlay]')).toHaveCount(0);
+
+    await peerA.page.locator('.action-bar').getByRole('button', { name: 'Leave' }).click();
+    await expect(peerA.page.getByRole('dialog', { name: 'Leave game?' })).toBeVisible();
+    await expect(peerA.page.locator('main[data-scene="game_play"]')).toBeVisible();
+    await peerA.page.getByRole('button', { name: 'Stay' }).click();
+    await expect(peerA.page.getByRole('dialog', { name: 'Leave game?' })).toHaveCount(0);
+
+    await peerA.page.locator('.action-bar').getByRole('button', { name: 'Leave' }).click();
+    await peerA.page.locator('[data-confirm-leave-room]').click();
+    await expect(peerA.page.locator('main[data-scene="matchmaking_lobby"]')).toBeVisible({ timeout: 15000 });
+    await expect(peerA.page.locator('[data-room-list]')).toBeVisible();
+    await expect(peerA.page.locator('[data-player-name]')).toHaveValue(names[0]);
+
+    expect(peerA.consoleErrors).toEqual([]);
+    expect(peerB.consoleErrors).toEqual([]);
+    expect(peerA.failedRequests).toEqual([]);
+    expect(peerB.failedRequests).toEqual([]);
+  } finally {
+    await Promise.allSettled([peerA.context.close(), peerB.context.close()]);
+  }
+});
+
 test('keeps waiting canvas inside stage frame on a small smartphone viewport', async ({ browser }, testInfo) => {
   const names = peerNames('WaitUI', testInfo.project.name, 1);
   const peer = await openPeer(browser, { width: 360, height: 560 });
