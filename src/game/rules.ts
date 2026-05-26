@@ -47,6 +47,7 @@ export const CARD_COLOR_LABELS: Record<CardColor, string> = {
 
 interface CreateLocalGameOptions {
   playerCount?: number;
+  playerIds?: PlayerId[];
   seed?: string;
   playerNames?: string[];
 }
@@ -67,16 +68,20 @@ export function createDeck(config: GameRulesConfig = DEFAULT_RULES): CardInstanc
 }
 
 export function createLocalGame(options: CreateLocalGameOptions = {}): GameSessionState {
-  const playerCount = options.playerCount ?? 2;
+  const playerCount = options.playerIds?.length ?? options.playerCount ?? 2;
 
   if (playerCount < DEFAULT_RULES.minPlayers || playerCount > DEFAULT_RULES.maxPlayers) {
     throw new Error(`Penguin Party requires ${DEFAULT_RULES.minPlayers}-${DEFAULT_RULES.maxPlayers} players.`);
   }
 
+  if (options.playerIds && new Set(options.playerIds).size !== options.playerIds.length) {
+    throw new Error('Player ids must be unique.');
+  }
+
   const deck = createDeck(DEFAULT_RULES);
   const cardsById = Object.fromEntries(deck.map((card) => [card.cardId, card]));
   const players: GamePlayerState[] = Array.from({ length: playerCount }, (_, index) => ({
-    playerId: `player-${index + 1}`,
+    playerId: options.playerIds?.[index] ?? `player-${index + 1}`,
     seatIndex: index,
     displayName: options.playerNames?.[index] ?? (index === 0 ? 'You' : `Player ${index + 1}`),
     isHost: index === 0,

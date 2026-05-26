@@ -8,13 +8,14 @@ test('runs six player mesh, spectator join, locked room, room full, and host ele
 ) => {
   test.skip(testInfo.project.name !== 'desktop-chromium', 'six-peer mesh is covered once on desktop');
 
+  const runSuffix = Math.random().toString(16).slice(2, 6);
   const peers = await Promise.all(
-    ['Peer A', 'Peer B', 'Peer C', 'Peer D', 'Peer E', 'Peer F'].map((name) =>
-      openPeer(browser, name, { width: 1280, height: 720 }),
-    ),
+    ['SixA', 'SixB', 'SixC', 'SixD', 'SixE', 'SixF']
+      .map((prefix) => `${prefix}${runSuffix}`)
+      .map((name) => openPeer(browser, name, { width: 1280, height: 720 })),
   );
-  const rejectedPeer = await openPeer(browser, 'Peer G', { width: 1280, height: 720 });
-  const spectator = await openPeer(browser, 'Spectator S', { width: 1280, height: 720 });
+  const rejectedPeer = await openPeer(browser, `SixG${runSuffix}`, { width: 1280, height: 720 });
+  const spectator = await openPeer(browser, `Spec${runSuffix}`, { width: 1280, height: 720 });
 
   try {
     await peers[0].page.goto('/');
@@ -59,14 +60,17 @@ test('runs six player mesh, spectator join, locked room, room full, and host ele
     await expect(fullRoom).toBeVisible({ timeout: 10000 });
     await expect(fullRoom).toBeDisabled();
     await expect(fullRoom).toContainText('Full');
-    const fullJoinResponse = await rejectedPeer.page.evaluate(async (targetRoomId) => {
-      const response = await fetch(`http://127.0.0.1:8787/rooms/${targetRoomId}/join`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ displayName: 'Peer G', password: 'iceberg' }),
-      });
-      return response.json() as Promise<{ code: string; message: string }>;
-    }, roomId);
+    const fullJoinResponse = await rejectedPeer.page.evaluate(
+      async ({ displayName, targetRoomId }) => {
+        const response = await fetch(`http://127.0.0.1:8787/rooms/${targetRoomId}/join`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ displayName, password: 'iceberg' }),
+        });
+        return response.json() as Promise<{ code: string; message: string }>;
+      },
+      { displayName: rejectedPeer.name, targetRoomId: roomId },
+    );
     expect(fullJoinResponse.code).toBe('room_full');
 
     for (const peer of peers) {
@@ -125,11 +129,13 @@ test('runs six player mesh, spectator join, locked room, room full, and host ele
       handCounts: [0, 0, 0, 0, 0, 0],
     });
 
+    const oldHostPeerId = await getLocalPeerId(peers[0].page);
     await peers[0].context.close();
     const remainingPlayers = peers.slice(1);
-    await expect.poll(async () => uniqueHostIds(remainingPlayers)).toHaveLength(1);
-    const newHostPeerId = await remainingPlayers[0].page.locator('[data-host-peer]').innerText();
-    expect(newHostPeerId).not.toBe('none');
+    await expect
+      .poll(async () => findElectedHostPeerId(remainingPlayers, oldHostPeerId), { timeout: 30000 })
+      .not.toBe('none');
+    const newHostPeerId = await findElectedHostPeerId(remainingPlayers, oldHostPeerId);
 
     const electedHost = await findPeerByPeerId(remainingPlayers, newHostPeerId);
     await expect(electedHost.page.locator('[data-local-role]')).toHaveText('host');
@@ -168,7 +174,7 @@ async function openPeer(browser: Browser, name: string, viewport: { width: numbe
 async function enterMatchmaking(page: Page, name: string) {
   await page.locator('[data-player-name]').fill(name);
   await page.getByRole('button', { name: 'Start' }).click();
-  await expect(page.locator('[data-room-list]')).toBeVisible();
+  await expect(page.locator('[data-room-list]')).toBeVisible({ timeout: 15000 });
 }
 
 async function joinRoom(page: Page, roomId: string, name: string, password: string) {
@@ -248,12 +254,33 @@ async function uniqueHostIds(peers: Array<{ page: Page }>) {
   return [...new Set(ids.filter((id) => id !== 'none'))];
 }
 
+async function findElectedHostPeerId(peers: Array<{ page: Page }>, oldHostPeerId: string) {
+  const hostIds = await uniqueHostIds(peers);
+
+  if (hostIds.length !== 1 || hostIds[0] === oldHostPeerId) {
+    return 'none';
+  }
+
+  const remainingPeerIds = await Promise.all(peers.map((peer) => getLocalPeerId(peer.page)));
+  return remainingPeerIds.includes(hostIds[0]) ? hostIds[0] : 'none';
+}
+
+async function getLocalPeerId(page: Page) {
+  const peerId = await page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as { identity?: { peerId: string } };
+    return debug.identity?.peerId ?? null;
+  });
+
+  if (!peerId) {
+    throw new Error('Local peer id was not available.');
+  }
+
+  return peerId;
+}
+
 async function findPeerByPeerId<TPeer extends { page: Page }>(peers: TPeer[], peerId: string): Promise<TPeer> {
   for (const peer of peers) {
-    const candidate = await peer.page.evaluate(() => {
-      const debug = window.__PENGUIN_DEBUG__ as { identity?: { peerId: string } };
-      return debug.identity?.peerId;
-    });
+    const candidate = await getLocalPeerId(peer.page);
 
     if (candidate === peerId) {
       return peer;

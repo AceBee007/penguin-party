@@ -130,7 +130,14 @@ export class PeerMeshClient {
     }
 
     if (message.type === 'peer_joined') {
+      const knownPeerRejoined = this.peers.has(message.peer.peerId);
+
       this.peers.set(message.peer.peerId, message.peer);
+
+      if (knownPeerRejoined) {
+        this.resetConnection(message.peer.peerId);
+      }
+
       this.publishPeers();
 
       if (shouldConnectPeers(toLocalSummary(this.options.identity), message.peer, this.currentHostPeerId)) {
@@ -139,9 +146,21 @@ export class PeerMeshClient {
       return;
     }
 
+    if (message.type === 'peer_disconnected') {
+      const record = this.connections.get(message.peerId);
+
+      if (record) {
+        record.status = 'disconnected';
+        record.channel?.close();
+        record.connection.close();
+      }
+
+      this.publishPeers();
+      return;
+    }
+
     if (message.type === 'peer_left') {
-      this.connections.get(message.peerId)?.connection.close();
-      this.connections.delete(message.peerId);
+      this.resetConnection(message.peerId);
       this.peers.delete(message.peerId);
       this.options.onPeerLeft?.(message.peerId);
       this.publishPeers();
@@ -182,11 +201,23 @@ export class PeerMeshClient {
     const existing = this.connections.get(peer.peerId);
 
     if (existing) {
-      if (createOffer && !existing.offered) {
-        await this.createOffer(peer, existing);
-      }
+      existing.peer = peer;
 
-      return existing;
+      if (
+        existing.connection.connectionState === 'closed' ||
+        existing.connection.connectionState === 'failed' ||
+        existing.channel?.readyState === 'closed'
+      ) {
+        existing.channel?.close();
+        existing.connection.close();
+        this.connections.delete(peer.peerId);
+      } else {
+        if (createOffer && !existing.offered) {
+          await this.createOffer(peer, existing);
+        }
+
+        return existing;
+      }
     }
 
     const connection = new RTCPeerConnection(RTC_CONFIG);
@@ -226,6 +257,18 @@ export class PeerMeshClient {
 
     this.publishPeers();
     return record;
+  }
+
+  private resetConnection(peerId: string): void {
+    const record = this.connections.get(peerId);
+
+    if (!record) {
+      return;
+    }
+
+    record.channel?.close();
+    record.connection.close();
+    this.connections.delete(peerId);
   }
 
   private async createOffer(peer: PeerSummary, record: PeerConnectionRecord): Promise<void> {

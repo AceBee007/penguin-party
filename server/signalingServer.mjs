@@ -5,6 +5,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 const HOST = process.env.SIGNALING_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.SIGNALING_PORT ?? 8787);
 const MAX_PLAYERS = 6;
+const REJOIN_TTL_MS = 3 * 60 * 60 * 1000;
 
 /** @type {Map<string, RoomRecord>} */
 const rooms = new Map();
@@ -115,7 +116,7 @@ wss.on('connection', (socket) => {
     socketsByPeerId.delete(session.peerId);
 
     if (room) {
-      removePeerFromRoom(room, session.peerId);
+      handlePeerDisconnected(room, session.peerId);
     }
   });
 });
@@ -140,8 +141,26 @@ async function routeHttp(request, response) {
 
   if (request.method === 'GET' && url.pathname === '/rooms') {
     writeJson(response, 200, {
-      rooms: [...rooms.values()].filter((room) => room.peers.size > 0).map(buildRoomMetadata),
+      rooms: [...rooms.values()].filter(hasConnectedPeer).map(buildRoomMetadata),
     });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/players/name-check') {
+    const body = await readJsonBody(request);
+    const displayName = sanitizeName(body.displayName, '', 16);
+
+    if (!displayName) {
+      writeJson(response, 200, { code: 'invalid_name', message: 'Player name is required.' });
+      return;
+    }
+
+    if (isDisplayNameOnline(displayName)) {
+      writeJson(response, 200, { code: 'duplicate_online_name', message: 'Player name is already online.' });
+      return;
+    }
+
+    writeJson(response, 200, { ok: true });
     return;
   }
 
@@ -150,6 +169,12 @@ async function routeHttp(request, response) {
     const roomName = sanitizeName(body.roomName, 'Penguin Room', 32);
     const hostDisplayName = sanitizeName(body.hostDisplayName, 'Peer A', 16);
     const password = String(body.password ?? '').trim();
+
+    if (isDisplayNameOnline(hostDisplayName)) {
+      writeJson(response, 200, { code: 'duplicate_online_name', message: 'Player name is already online.' });
+      return;
+    }
+
     const roomId = createRoomId();
     const now = Date.now();
     const peer = createPeer({
@@ -178,6 +203,7 @@ async function routeHttp(request, response) {
       peerId: peer.peerId,
       playerId: peer.playerId,
       reconnectToken: peer.reconnectToken,
+      rejoinCode: peer.rejoinCode,
       signalingToken: peer.signalingToken,
       existingPeers: [],
       role: peer.role,
@@ -197,6 +223,7 @@ async function routeHttp(request, response) {
 
     const body = await readJsonBody(request);
     const password = String(body.password ?? '').trim();
+    const displayName = sanitizeName(body.displayName, `Peer ${room.nextPlayerNumber}`, 16);
 
     if (room.passwordRecord && !password) {
       writeJoinError(response, { code: 'password_required', message: 'Room password is required.' });
@@ -215,9 +242,14 @@ async function routeHttp(request, response) {
       return;
     }
 
+    if (isDisplayNameOnline(displayName)) {
+      writeJoinError(response, { code: 'duplicate_online_name', message: 'Player name is already online.' });
+      return;
+    }
+
     const role = room.status === 'playing' ? 'spectator' : 'player';
     const peer = createPeer({
-      displayName: sanitizeName(body.displayName, `Peer ${room.nextPlayerNumber}`, 16),
+      displayName,
       joinedAt: Date.now(),
       peerId: createId('peer'),
       playerId: role === 'spectator' ? null : `player-${room.nextPlayerNumber}`,
@@ -234,9 +266,59 @@ async function routeHttp(request, response) {
       peerId: peer.peerId,
       playerId: peer.playerId,
       reconnectToken: peer.reconnectToken,
+      rejoinCode: peer.rejoinCode,
       signalingToken: peer.signalingToken,
       existingPeers,
       role,
+    });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/rejoin') {
+    const body = await readJsonBody(request);
+    const rejoinCode = String(body.rejoinCode ?? '').trim();
+    const match = findPeerByRejoinCode(rejoinCode);
+
+    if (!match) {
+      writeJoinError(response, { code: 'invalid_rejoin_code', message: 'Invalid re-join code.' });
+      return;
+    }
+
+    const { room, peer } = match;
+
+    if (peer.rejoinCodeExpiresAt < Date.now()) {
+      writeJoinError(response, { code: 'expired_rejoin_code', message: 'Re-join code has expired.' });
+      return;
+    }
+
+    if (room.status !== 'playing') {
+      writeJoinError(response, { code: 'game_already_finished', message: 'This game cannot be resumed.' });
+      return;
+    }
+
+    const oldSocket = socketsByPeerId.get(peer.peerId);
+
+    if (oldSocket?.readyState === WebSocket.OPEN) {
+      oldSocket.close();
+    }
+
+    peer.signalingToken = createId('signal');
+    peer.reconnectToken = createId('reconnect');
+    peer.connectionStatus = 'new';
+    peer.wsConnectedAt = null;
+    room.updatedAt = Date.now();
+
+    writeJson(response, 200, {
+      room: buildRoomMetadata(room),
+      peerId: peer.peerId,
+      playerId: peer.playerId,
+      reconnectToken: peer.reconnectToken,
+      rejoinCode: peer.rejoinCode,
+      signalingToken: peer.signalingToken,
+      existingPeers: [...room.peers.values()].map(toPeerSummary).filter((candidate) => candidate.peerId !== peer.peerId),
+      role: peer.role,
+      joinedAt: peer.joinedAt,
+      displayName: peer.displayName,
     });
     return;
   }
@@ -271,6 +353,8 @@ function writeJoinError(response, payload) {
 }
 
 function createPeer({ displayName, joinedAt, peerId, playerId, role }) {
+  const rejoinCode = createRejoinCode();
+
   return {
     peerId,
     playerId,
@@ -278,6 +362,8 @@ function createPeer({ displayName, joinedAt, peerId, playerId, role }) {
     joinedAt,
     role,
     reconnectToken: createId('reconnect'),
+    rejoinCode,
+    rejoinCodeExpiresAt: joinedAt + REJOIN_TTL_MS,
     signalingToken: createId('signal'),
     connectionStatus: 'new',
     wsConnectedAt: null,
@@ -301,6 +387,30 @@ function buildRoomMetadata(room) {
   };
 }
 
+function handlePeerDisconnected(room, peerId) {
+  const peer = room.peers.get(peerId);
+
+  if (!peer) {
+    return;
+  }
+
+  if (room.status === 'playing' && room.hostPeerId !== peerId) {
+    peer.connectionStatus = 'disconnected';
+    peer.wsConnectedAt = null;
+    room.updatedAt = Date.now();
+
+    if (!hasConnectedPeer(room)) {
+      rooms.delete(room.roomId);
+      return;
+    }
+
+    broadcastToRoom(room, peerId, { type: 'peer_disconnected', peerId });
+    return;
+  }
+
+  removePeerFromRoom(room, peerId);
+}
+
 function removePeerFromRoom(room, peerId) {
   const peer = room.peers.get(peerId);
 
@@ -311,7 +421,7 @@ function removePeerFromRoom(room, peerId) {
   room.peers.delete(peerId);
   room.updatedAt = Date.now();
 
-  if (room.peers.size === 0) {
+  if (room.peers.size === 0 || !hasConnectedPeer(room)) {
     rooms.delete(room.roomId);
     return;
   }
@@ -326,6 +436,40 @@ function removePeerFromRoom(room, peerId) {
   }
 
   broadcastToRoom(room, peerId, { type: 'peer_left', peerId });
+}
+
+function hasConnectedPeer(room) {
+  return [...room.peers.values()].some((peer) => socketsByPeerId.has(peer.peerId));
+}
+
+function isDisplayNameOnline(displayName) {
+  const normalized = normalizeDisplayName(displayName);
+
+  return [...rooms.values()].some((room) =>
+    [...room.peers.values()].some(
+      (peer) => peer.connectionStatus !== 'disconnected' && normalizeDisplayName(peer.displayName) === normalized,
+    ),
+  );
+}
+
+function normalizeDisplayName(displayName) {
+  return String(displayName ?? '').trim().toLocaleLowerCase();
+}
+
+function findPeerByRejoinCode(rejoinCode) {
+  if (!rejoinCode) {
+    return null;
+  }
+
+  for (const room of rooms.values()) {
+    for (const peer of room.peers.values()) {
+      if (peer.rejoinCode === rejoinCode) {
+        return { room, peer };
+      }
+    }
+  }
+
+  return null;
 }
 
 function toPeerSummary(peer) {
@@ -412,6 +556,10 @@ function createRoomId() {
 
 function createId(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function createRejoinCode() {
+  return crypto.randomBytes(9).toString('base64url');
 }
 
 function createPasswordRecord(password) {

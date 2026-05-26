@@ -9,11 +9,20 @@ import {
   getFinalStandings,
   getLegalMovesForPlayer,
   playCard,
+  resolveCurrentPlayerNoMoves,
 } from '../game/rules';
 import type { CardId, GameSessionState, MoveTarget, PlayerId, RoundPlayerState } from '../game/types';
 import { electNextHostPeerId } from '../network/hostElection';
 import { PeerMeshClient } from '../network/peerMesh';
-import { createRoom, JoinRoomFailure, joinRoom, listRooms, markRoomPlaying } from '../network/signalingClient';
+import {
+  createRoom,
+  JoinRoomFailure,
+  joinRoom,
+  listRooms,
+  markRoomPlaying,
+  resumeGame,
+  validatePlayerName,
+} from '../network/signalingClient';
 import type {
   EventCommitted,
   Heartbeat,
@@ -34,6 +43,8 @@ const INITIAL_DRAG_STATUS: StageDragStatus = {
 
 const PLAYER_NAME_STORAGE_KEY = 'penguin-party.playerName';
 const ROOM_LIST_POLL_MS = 1600;
+const AUTO_PLAY_DISCONNECTED_MIN_MS = 5000;
+const AUTO_PLAY_DISCONNECTED_JITTER_MS = 3000;
 
 type MultiplayerScene =
   | 'landing_page'
@@ -55,6 +66,7 @@ export function MultiplayerGame() {
   const [peers, setPeers] = useState<PeerRuntimeView[]>([]);
   const [dragStatus, setDragStatus] = useState<StageDragStatus>(INITIAL_DRAG_STATUS);
   const [playerName, setPlayerName] = useState(() => readStoredPlayerName());
+  const [rejoinCode, setRejoinCode] = useState('');
   const [rooms, setRooms] = useState<RoomMetadata[]>([]);
   const [isRoomListLoading, setIsRoomListLoading] = useState(false);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -74,8 +86,12 @@ export function MultiplayerGame() {
   const peersRef = useRef<PeerRuntimeView[]>([]);
   const hostPeerIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
+  const autoPlayTimeoutRef = useRef<number | null>(null);
+  const autoPlayScheduleRef = useRef<{ playerId: PlayerId; revision: number } | null>(null);
   const trimmedPlayerName = playerName.trim();
+  const trimmedRejoinCode = rejoinCode.trim();
   const isPlayerNameValid = trimmedPlayerName.length > 0 && trimmedPlayerName.length <= 16;
+  const canStartLanding = isPlayerNameValid || trimmedRejoinCode.length > 0;
   const roomItems = useMemo(() => rooms.map(toRoomListItem), [rooms]);
 
   useEffect(() => {
@@ -111,6 +127,11 @@ export function MultiplayerGame() {
 
   useEffect(
     () => () => {
+      if (autoPlayTimeoutRef.current !== null) {
+        window.clearTimeout(autoPlayTimeoutRef.current);
+        autoPlayTimeoutRef.current = null;
+      }
+      autoPlayScheduleRef.current = null;
       meshRef.current?.close();
       delete window.__PENGUIN_DEBUG__;
     },
@@ -169,6 +190,49 @@ export function MultiplayerGame() {
 
     return () => window.clearInterval(intervalId);
   }, [game, hostPeerId, identity]);
+
+  useEffect(() => {
+    if (!identity || identity.peerId !== hostPeerId || !game || game.status !== 'round_active') {
+      clearAutoPlayTimer();
+      return undefined;
+    }
+
+    const activePlayerId = game.currentRound?.activePlayerId ?? null;
+    const activePeer = activePlayerId ? peers.find((peer) => peer.playerId === activePlayerId) : null;
+
+    if (
+      !activePlayerId ||
+      !activePeer ||
+      activePeer.peerId === identity.peerId ||
+      activePeer.connectionStatus === 'connected' ||
+      activePeer.role === 'spectator'
+    ) {
+      clearAutoPlayTimer();
+      return undefined;
+    }
+
+    if (
+      autoPlayScheduleRef.current?.playerId === activePlayerId &&
+      autoPlayScheduleRef.current.revision === game.revision
+    ) {
+      return undefined;
+    }
+
+    clearAutoPlayTimer();
+
+    const delayMs =
+      AUTO_PLAY_DISCONNECTED_MIN_MS + Math.floor(Math.random() * (AUTO_PLAY_DISCONNECTED_JITTER_MS + 1));
+    const disconnectedPlayerId = activePlayerId;
+    const scheduledRevision = game.revision;
+    autoPlayScheduleRef.current = { playerId: disconnectedPlayerId, revision: scheduledRevision };
+    autoPlayTimeoutRef.current = window.setTimeout(() => {
+      autoPlayTimeoutRef.current = null;
+      autoPlayScheduleRef.current = null;
+      autoPlayDisconnectedPlayer(disconnectedPlayerId, scheduledRevision);
+    }, delayMs);
+
+    return undefined;
+  }, [game, hostPeerId, identity, peers]);
 
   const activePlayer = game ? getActivePlayer(game) : null;
   const localPlayerId = identity?.playerId ?? null;
@@ -248,16 +312,34 @@ export function MultiplayerGame() {
     mesh.connect();
   }, []);
 
-  const handleEnterMatchmaking = useCallback(() => {
+  const handleEnterMatchmaking = useCallback(async () => {
+    if (trimmedRejoinCode) {
+      try {
+        const nextIdentity = await resumeGame({ rejoinCode: trimmedRejoinCode });
+        setPlayerName(nextIdentity.displayName);
+        setRejoinCode('');
+        setMessage(`Resumed room ${nextIdentity.room.roomId}.`);
+        startMesh(nextIdentity);
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : 'Re-join failed.');
+      }
+      return;
+    }
+
     if (!isPlayerNameValid) {
       return;
     }
 
-    setPlayerName(trimmedPlayerName);
-    setScene('matchmaking_lobby');
-    setMessage('Loading open rooms.');
-    void refreshOpenRooms(true);
-  }, [isPlayerNameValid, refreshOpenRooms, trimmedPlayerName]);
+    try {
+      await validatePlayerName(trimmedPlayerName);
+      setPlayerName(trimmedPlayerName);
+      setScene('matchmaking_lobby');
+      setMessage('Loading open rooms.');
+      void refreshOpenRooms(true);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Player name is unavailable.');
+    }
+  }, [isPlayerNameValid, refreshOpenRooms, startMesh, trimmedPlayerName, trimmedRejoinCode]);
 
   const handleCreateRoom = useCallback(async () => {
     if (!isPlayerNameValid) {
@@ -367,6 +449,7 @@ export function MultiplayerGame() {
     const playerPeers = getPlayerPeers(currentIdentity, peersRef.current);
     const snapshot = createLocalGame({
       playerCount: playerPeers.length,
+      playerIds: playerPeers.map((peer) => peer.playerId),
       playerNames: playerPeers.map((peer) => peer.displayName),
       seed: `room-${currentIdentity.room.roomId}`,
     });
@@ -450,17 +533,31 @@ export function MultiplayerGame() {
                 onChange={(event) => setPlayerName(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
-                    handleEnterMatchmaking();
+                    void handleEnterMatchmaking();
                   }
                 }}
               />
             </label>
-            <button type="button" disabled={!isPlayerNameValid} onClick={handleEnterMatchmaking}>
+            <label className="player-name-field">
+              Re-join code
+              <input
+                data-rejoin-code-input
+                value={rejoinCode}
+                maxLength={32}
+                onChange={(event) => setRejoinCode(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    void handleEnterMatchmaking();
+                  }
+                }}
+              />
+            </label>
+            <button type="button" disabled={!canStartLanding} onClick={() => void handleEnterMatchmaking()}>
               Start
             </button>
           </div>
           <p className="lobby-message" data-game-message>
-            {isPlayerNameValid ? message : 'Player name is required.'}
+            {canStartLanding ? message : 'Player name or re-join code is required.'}
           </p>
         </section>
       ) : null}
@@ -625,7 +722,7 @@ export function MultiplayerGame() {
                 <div className="player-row" data-active={peer.playerId === activePlayer?.playerId} key={peer.peerId}>
                   <div>
                     <strong>{peer.displayName}</strong>
-                    <span>{peer.role} / {peer.connectionStatus}</span>
+                    <span>{game ? peer.role : `${peer.role} / ${peer.connectionStatus}`}</span>
                   </div>
                   <div className="player-row__stats">
                     <span>{peer.playerId ?? 'spectator'}</span>
@@ -698,10 +795,17 @@ export function MultiplayerGame() {
                 <span>Players</span>
                 <strong data-player-count>{playerCount}</strong>
               </div>
-              <div>
-                <span>Connected</span>
-                <strong data-connected-count>{connectedPeerCount}</strong>
-              </div>
+              {!game ? (
+                <div>
+                  <span>Connected</span>
+                  <strong data-connected-count>{connectedPeerCount}</strong>
+                </div>
+              ) : (
+                <div>
+                  <span>Rejoin</span>
+                  <strong data-rejoin-code>{identity.rejoinCode ?? 'none'}</strong>
+                </div>
+              )}
               <div>
                 <span>Spectators</span>
                 <strong data-spectator-count>{spectatorCount}</strong>
@@ -974,6 +1078,83 @@ export function MultiplayerGame() {
       }
     }
   }
+
+  function autoPlayDisconnectedPlayer(playerId: PlayerId, expectedRevision: number): void {
+    const currentIdentity = identityRef.current;
+    const currentGame = gameRef.current;
+    const currentHostPeerId = hostPeerIdRef.current;
+
+    if (
+      !currentIdentity ||
+      currentIdentity.peerId !== currentHostPeerId ||
+      !currentGame ||
+      currentGame.revision !== expectedRevision ||
+      currentGame.currentRound?.activePlayerId !== playerId
+    ) {
+      return;
+    }
+
+    const activePeer = peersRef.current.find((peer) => peer.playerId === playerId);
+
+    if (!activePeer || activePeer.connectionStatus === 'connected') {
+      return;
+    }
+
+    const legalMovesForDisconnectedPlayer = getLegalMovesForPlayer(currentGame, playerId);
+
+    if (legalMovesForDisconnectedPlayer.length > 0) {
+      const selectedMove =
+        legalMovesForDisconnectedPlayer[Math.floor(Math.random() * legalMovesForDisconnectedPlayer.length)];
+      commitHostMove(playerId, selectedMove.cardId, selectedMove.target, null);
+      return;
+    }
+
+    const nextGame = resolveCurrentPlayerNoMoves(currentGame);
+
+    if (nextGame.revision !== currentGame.revision) {
+      commitHostResolvedState(nextGame);
+    }
+  }
+
+  function clearAutoPlayTimer(): void {
+    if (autoPlayTimeoutRef.current !== null) {
+      window.clearTimeout(autoPlayTimeoutRef.current);
+      autoPlayTimeoutRef.current = null;
+    }
+
+    autoPlayScheduleRef.current = null;
+  }
+
+  function commitHostResolvedState(nextGame: GameSessionState): void {
+    const currentIdentity = identityRef.current;
+    const event = nextGame.eventLog.at(-1);
+
+    if (!currentIdentity || currentIdentity.peerId !== hostPeerIdRef.current || !event) {
+      return;
+    }
+
+    eventSeqRef.current += 1;
+    gameRef.current = nextGame;
+    setGame(nextGame);
+    setDragStatus(INITIAL_DRAG_STATUS);
+    setMessage(`Committed event ${eventSeqRef.current}; revision ${nextGame.revision}.`);
+
+    for (const peer of peersRef.current) {
+      if (peer.peerId === currentIdentity.peerId || peer.connectionStatus !== 'connected') {
+        continue;
+      }
+
+      const payload: EventCommitted = {
+        type: 'event_committed',
+        event,
+        eventSeq: eventSeqRef.current,
+        revision: nextGame.revision,
+        stateHash: nextGame.stateHash,
+        snapshot: peer.role === 'spectator' ? redactGameForSpectator(nextGame) : nextGame,
+      };
+      meshRef.current?.sendPayload(peer.peerId, payload);
+    }
+  }
 }
 
 function reassignActivePlayer(game: GameSessionState, activePlayerId: PlayerId): GameSessionState {
@@ -996,7 +1177,7 @@ function reassignActivePlayer(game: GameSessionState, activePlayerId: PlayerId):
   };
 }
 
-function getPlayerPeers(identity: NetworkIdentity, peers: PeerRuntimeView[]): PeerRuntimeView[] {
+function getPlayerPeers(identity: NetworkIdentity, peers: PeerRuntimeView[]): Array<PeerRuntimeView & { playerId: PlayerId }> {
   return [toPeerRuntime(identity, 'connected'), ...peers]
     .filter((peer) => peer.role !== 'spectator')
     .filter((peer): peer is PeerRuntimeView & { playerId: PlayerId } => peer.playerId !== null)

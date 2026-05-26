@@ -4,6 +4,8 @@ import type {
   JoinRoomRequest,
   JoinRoomResponse,
   NetworkIdentity,
+  ResumeGameRequest,
+  ResumeGameResponse,
   RoomMetadata,
   SignalingClientMessage,
   SignalingServerMessage,
@@ -36,15 +38,57 @@ export async function createRoom(request: CreateRoomRequest, httpUrl = getSignal
     body: JSON.stringify(request),
   });
 
-  if (!response.ok) {
-    throw new Error(`Room creation failed: ${response.status}`);
+  const payload = (await response.json()) as CreateRoomResponse | { code: string; message: string };
+
+  if (!response.ok || 'code' in payload) {
+    throw new JoinRoomFailure(
+      'code' in payload ? payload.code : 'create_failed',
+      'message' in payload ? payload.message : `Room creation failed: ${response.status}`,
+    );
   }
 
-  const payload = (await response.json()) as CreateRoomResponse;
   return {
     ...payload,
     joinedAt: payload.room.createdAt,
     displayName: request.hostDisplayName,
+  };
+}
+
+export async function validatePlayerName(displayName: string, httpUrl = getSignalingHttpUrl()): Promise<void> {
+  const response = await fetch(`${httpUrl}/players/name-check`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ displayName }),
+  });
+  const payload = (await response.json()) as { ok: true } | { code: string; message: string };
+
+  if (!response.ok || 'code' in payload) {
+    throw new JoinRoomFailure(
+      'code' in payload ? payload.code : 'name_check_failed',
+      'message' in payload ? payload.message : `Name check failed: ${response.status}`,
+    );
+  }
+}
+
+export async function resumeGame(request: ResumeGameRequest, httpUrl = getSignalingHttpUrl()): Promise<NetworkIdentity> {
+  const response = await fetch(`${httpUrl}/rejoin`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  const payload = (await response.json()) as ResumeGameResponse | { code: string; message: string };
+
+  if (!response.ok || 'code' in payload) {
+    throw new JoinRoomFailure(
+      'code' in payload ? payload.code : 'rejoin_failed',
+      'message' in payload ? payload.message : `Rejoin failed: ${response.status}`,
+    );
+  }
+
+  return {
+    ...payload,
+    joinedAt: payload.joinedAt,
+    displayName: payload.displayName,
   };
 }
 

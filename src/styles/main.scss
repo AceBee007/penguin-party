@@ -352,10 +352,10 @@ button {
 
 .landing-form {
   display: grid;
-  grid-template-columns: minmax(220px, 360px) auto;
+  grid-template-columns: repeat(2, minmax(180px, 1fr)) auto;
   gap: 12px;
   align-items: end;
-  width: min(100%, 520px);
+  width: min(100%, 760px);
   padding: 16px;
   border: 1px solid rgba(23, 49, 58, 0.14);
   border-radius: 8px;

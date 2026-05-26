@@ -32,6 +32,7 @@ export interface NetworkIdentity {
   role: PeerRole;
   joinedAt: number;
   reconnectToken: string;
+  rejoinCode?: string;
   signalingToken: string;
   existingPeers: PeerSummary[];
   displayName: string;
@@ -49,8 +50,13 @@ export interface JoinRoomRequest {
   password?: string;
 }
 
+export interface ResumeGameRequest {
+  rejoinCode: string;
+}
+
 export interface CreateRoomResponse extends Omit<NetworkIdentity, 'displayName'> {}
 export interface JoinRoomResponse extends Omit<NetworkIdentity, 'displayName'> {}
+export interface ResumeGameResponse extends NetworkIdentity {}
 
 export type SignalingClientMessage =
   | { type: 'hello'; roomId: string; peerId: string; signalingToken: string }
@@ -62,6 +68,7 @@ export type SignalingClientMessage =
 export type SignalingServerMessage =
   | { type: 'hello_ok'; room: RoomMetadata; peers: PeerSummary[] }
   | { type: 'peer_joined'; peer: PeerSummary }
+  | { type: 'peer_disconnected'; peerId: string }
   | { type: 'peer_left'; peerId: string }
   | { type: 'offer'; fromPeerId: string; description: RTCSessionDescriptionInit }
   | { type: 'answer'; fromPeerId: string; description: RTCSessionDescriptionInit }
