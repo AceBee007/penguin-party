@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BrandTitle } from './BrandTitle';
 import { PixiDragStage } from './PixiDragStage';
 import {
   CARD_COLOR_LABELS,
@@ -645,9 +646,8 @@ export function MultiplayerGame() {
     <main className="app-shell" data-scene={currentScene}>
       <header className="topbar">
         <div className="brand">
-          <span className="brand__mark" aria-hidden="true" />
           <div className="brand__copy">
-            <h1 className="brand__title">Penguin Party</h1>
+            <BrandTitle />
             <span className="brand__mode">{sceneLabel(currentScene)}</span>
           </div>
         </div>

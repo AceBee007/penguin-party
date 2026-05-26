@@ -29,9 +29,17 @@ describe('App', () => {
   });
 
   it('renders the multiplayer landing page by default', () => {
-    render(<App />);
+    const { container } = render(<App />);
 
-    expect(screen.getByRole('heading', { name: 'Penguin Party' })).toBeInTheDocument();
+    const title = screen.getByRole('heading', { name: 'Penguin Party' });
+    const titleLetters = title.querySelectorAll('.brand__title-letter');
+
+    expect(title).toBeInTheDocument();
+    expect(container.querySelector('.brand__mark')).toBeNull();
+    expect(titleLetters).toHaveLength(12);
+    for (let index = 0; index < titleLetters.length; index += 1) {
+      expect(titleLetters[index]).toHaveClass(`brand__title-letter--${index % 5}`);
+    }
     expect(screen.getByText('Landing page')).toBeInTheDocument();
     expect((screen.getByLabelText('Player name') as HTMLInputElement).value).toMatch(/^Player_[0-9a-f]{6}$/);
     expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled();

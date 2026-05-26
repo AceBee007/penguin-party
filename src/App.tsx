@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { BrandTitle } from './components/BrandTitle';
 import { MultiplayerGame } from './components/MultiplayerGame';
 import { PixiDragStage } from './components/PixiDragStage';
 import {
@@ -81,9 +82,8 @@ function LocalGame() {
     <main className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <span className="brand__mark" aria-hidden="true" />
           <div className="brand__copy">
-            <h1 className="brand__title">Penguin Party</h1>
+            <BrandTitle />
             <span className="brand__mode">Local verification mode</span>
           </div>
         </div>

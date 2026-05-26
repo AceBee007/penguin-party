@@ -94,19 +94,6 @@ button {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 12px;
-}
-
-.brand__mark {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: #eb5757;
-  box-shadow:
-    18px 0 0 #f2c94c,
-    36px 0 0 #38a169,
-    54px 0 0 #2f80ed;
 }
 
 .brand__copy {
@@ -123,6 +110,30 @@ button {
   line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.brand__title-letter {
+  display: inline-block;
+}
+
+.brand__title-letter--0 {
+  color: #eb5757;
+}
+
+.brand__title-letter--1 {
+  color: #f2c94c;
+}
+
+.brand__title-letter--2 {
+  color: #38a169;
+}
+
+.brand__title-letter--3 {
+  color: #2f80ed;
+}
+
+.brand__title-letter--4 {
+  color: #8d5bb5;
 }
 
 .brand__mode {
