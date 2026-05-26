@@ -134,6 +134,29 @@ test('uses compact mobile scoreboard and confirms leaving during game play', asy
     await expect(peerA.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
     await peerA.page.locator('[data-start-game]').click();
     await expect(peerA.page.locator('canvas')).toBeVisible();
+    const playAreaLayout = await peerA.page.evaluate(() => {
+      const actionBar = document.querySelector('.action-bar')?.getBoundingClientRect();
+      const message = document.querySelector('[data-game-message]')?.getBoundingClientRect();
+      const stage = document.querySelector('.stage-frame')?.getBoundingClientRect();
+
+      return actionBar && message && stage
+        ? {
+            actionBottom: actionBar.bottom,
+            messageBottomGap: window.innerHeight - message.bottom,
+            messageTop: message.top,
+            stageBottom: stage.bottom,
+            stageHeight: stage.height,
+            stageTop: stage.top,
+          }
+        : null;
+    });
+
+    expect(playAreaLayout).not.toBeNull();
+    expect(playAreaLayout!.actionBottom).toBeLessThanOrEqual(playAreaLayout!.stageTop);
+    expect(playAreaLayout!.messageTop).toBeGreaterThanOrEqual(playAreaLayout!.stageBottom);
+    expect(playAreaLayout!.messageBottomGap).toBeGreaterThanOrEqual(8);
+    expect(playAreaLayout!.messageBottomGap).toBeLessThanOrEqual(40);
+    expect(playAreaLayout!.stageHeight).toBeGreaterThan(430);
 
     await expect(peerA.page.locator('[data-compact-scoreboard]')).toBeVisible();
     await expect(peerA.page.locator('[data-compact-player]')).toHaveCount(2);

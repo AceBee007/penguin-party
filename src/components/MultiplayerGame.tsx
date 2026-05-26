@@ -942,6 +942,19 @@ export function MultiplayerGame() {
           ) : null}
 
           <section className="play-area">
+            <div className="action-bar">
+              <div className="action-bar__buttons">
+                {canStartGame ? (
+                  <button data-start-game type="button" onClick={handleStartGame}>
+                    Start game
+                  </button>
+                ) : null}
+                <button type="button" onClick={handleLeaveClick}>
+                  Leave
+                </button>
+              </div>
+            </div>
+
             <div className="stage-frame">
               {game ? (
                 <PixiDragStage
@@ -975,19 +988,7 @@ export function MultiplayerGame() {
               </div>
             ) : null}
 
-            <div className="action-bar">
-              <p data-game-message>{message}</p>
-              <div className="action-bar__buttons">
-                {canStartGame ? (
-                  <button data-start-game type="button" onClick={handleStartGame}>
-                    Start game
-                  </button>
-                ) : null}
-                <button type="button" onClick={handleLeaveClick}>
-                  Leave
-                </button>
-              </div>
-            </div>
+            <p className="game-message" data-game-message>{message}</p>
           </section>
 
           {isBoardMaximized && game && isSpectator ? (

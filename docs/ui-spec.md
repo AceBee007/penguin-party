@@ -557,6 +557,14 @@ host が `waiting_room` 中に退出した場合、残存 player のうち新 ho
 2. プレイ済みカード領域
 3. ローカルプレイヤー手札領域
 4. 他プレイヤー手札数表示領域
+5. 操作ボタン領域
+6. game message 領域
+
+表示順:
+
+- `action-bar` は `play-area` の上部に表示し、game 操作ボタンを置く
+- `data-game-message` は `play-area` の下部に表示し、従来と同じ位置関係を維持する
+- 小画面の `game_play` では `stage-frame` を viewport に対して広く取り、`data-game-message` が viewport 下端から約20px上に見えるようにする
 
 ### 小画面用 compact scoreboard
 

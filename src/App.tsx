@@ -121,17 +121,7 @@ function LocalGame() {
         </aside>
 
         <section className="play-area">
-          <div className="stage-frame">
-            <PixiDragStage
-              activePlayerId={activePlayerId}
-              game={game}
-              legalMoves={legalMoves}
-              onPlayCard={handlePlayCard}
-            />
-          </div>
-
           <div className="action-bar">
-            <p data-game-message>{message}</p>
             <div className="action-bar__buttons">
               {game.status === 'round_active' && legalMoves.length === 0 ? (
                 <button type="button" onClick={handleResolveNoMoves}>
@@ -148,6 +138,17 @@ function LocalGame() {
               </button>
             </div>
           </div>
+
+          <div className="stage-frame">
+            <PixiDragStage
+              activePlayerId={activePlayerId}
+              game={game}
+              legalMoves={legalMoves}
+              onPlayCard={handlePlayCard}
+            />
+          </div>
+
+          <p className="game-message" data-game-message>{message}</p>
         </section>
 
         <aside className="round-panel" aria-label="Round details">
