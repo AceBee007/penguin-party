@@ -60,12 +60,11 @@ type PlayerId = string;
 type CardId = string;
 
 type GameStatus =
-  | 'lobby'
+  | 'waiting_room'
   | 'starting'
   | 'round_active'
   | 'round_result'
-  | 'game_result'
-  | 'closed';
+  | 'game_result';
 
 interface GameRulesConfig {
   minPlayers: 2;
@@ -97,6 +96,9 @@ interface GameSessionState {
   revision: number;
 }
 ```
+
+`GameStatus.waiting_room` はゲーム開始前の待機状態です。
+signaling server の `RoomMetadata.status` は `docs/network-spec.md` に合わせて `lobby` / `playing` を使い、UI scene と game session status では `waiting_room` と呼びます。
 
 ### `GameSessionState` に含めるべきもの
 
@@ -306,14 +308,12 @@ interface LegalMove {
 
 ```ts
 type SceneKind =
-  | 'boot'
-  | 'title'
-  | 'lobby'
-  | 'match'
+  | 'landing_page'
+  | 'matchmaking_lobby'
+  | 'waiting_room'
+  | 'game_play'
   | 'round_result'
-  | 'game_result'
-  | 'settings'
-  | 'reconnect';
+  | 'game_result';
 
 interface AppSceneState {
   scene: SceneKind;
@@ -321,10 +321,11 @@ interface AppSceneState {
 }
 
 type ModalState =
-  | { kind: 'confirm_leave' }
-  | { kind: 'rules' }
+  | { kind: 'create_room' }
+  | { kind: 'join_password'; roomId: string }
+  | { kind: 'leave_room_confirm' }
   | { kind: 'connection_error'; message: string }
-  | { kind: 'player_profile'; playerId: PlayerId };
+  | null;
 
 interface MatchSceneUiState {
   selectedCardId: CardId | null;
@@ -358,7 +359,7 @@ UI 状態には、選択中カード、ハイライト中の置き場所、モ�
 ```ts
 type PeerCommand =
   | {
-      type: 'join_lobby';
+      type: 'join_waiting_room';
       gameId: GameId;
       displayName: string;
       reconnectToken?: string;
@@ -405,7 +406,7 @@ interface PublicPlayerView {
   seatIndex: number;
   totalPenalty: number;
   remainingCardCount: number;
-  status: RoundPlayerStatus | 'lobby';
+  status: RoundPlayerStatus | 'waiting_room';
 }
 
 interface PrivatePlayerView {

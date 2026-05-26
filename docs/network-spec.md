@@ -15,7 +15,7 @@
 - 各 player peer のゲームセッションは、ホスト交代に備えて完全なゲーム状態、イベントログ、最新スナップショットを保持する
 - spectator peer は観戦に必要な公開状態だけを保持し、手札、山札順、非公開乱数 seed は受け取らない
 - ホスト切断時は、残っているプレイヤーの中からランダムに見える決定的な手順で次のホストを選ぶ
-- private room ではパスワードを設定できる
+- すべての room は room list に表示し、パスワード付き room では参加時にパスワードを要求できる
 
 ### 仕様の優先順位
 
@@ -57,7 +57,7 @@
 - ホスト以外の player peer も完全な状態を複製し、ホスト切断時にゲームを継続できるようにする
 - spectator peer は観戦用の公開状態だけを受け取り、host migration には参加しない
 - ローカル Node.js サーバーを中央集権的なゲームサーバーではなく、軽量な signaling/lobby サーバーとして使う
-- public room と private room をサポートする
+- 鍵なし room と鍵付き room をサポートする
 - Playwright MCP で Peer A/B/C および最大 Peer F までの検証を行いやすい通信設計にする
 
 ## 3. 非目的
@@ -101,8 +101,8 @@ flowchart LR
 責務:
 
 - ルーム作成
-- public room の一覧配信
-- private room のパスワード確認
+- room list の一覧配信
+- 鍵付き room のパスワード確認
 - 参加者の signaling 用接続管理
 - WebRTC の offer、answer、ICE candidate の中継
 - ルーム参加中の peer 一覧通知
@@ -168,7 +168,6 @@ type HostEpoch = number;
 type EventSeq = number;
 type Revision = number;
 
-type RoomVisibility = 'public' | 'private';
 type PeerRole = 'host' | 'player' | 'spectator';
 type PeerConnectionStatus =
   | 'new'
@@ -197,7 +196,6 @@ type PeerConnectionStatus =
 interface RoomMetadata {
   roomId: RoomId;
   roomName: string;
-  visibility: RoomVisibility;
   createdAt: number;
   updatedAt: number;
 
@@ -206,22 +204,28 @@ interface RoomMetadata {
   currentSpectatorCount: number;
   maxPlayers: 6;
 
-  status: 'lobby' | 'playing' | 'closed';
+  status: 'lobby' | 'playing';
   hasPassword: boolean;
 }
 ```
 
-### Public room
+room status:
 
-- public room は room list に表示する
-- room list には `roomId`, `roomName`, `visibility`, `hasPassword`, `currentPlayerCount`, `currentSpectatorCount`, `maxPlayers`, `status` を含める
+- `lobby`: room はゲーム開始待ちで、player として参加できる
+- `playing`: room はゲーム進行中です。round result / game result 表示中も `playing` として扱い、途中参加者は spectator になる
+- `closed` は持たない。参加 peer が0人になった room は signaling server が自動削除し、room list から消える
+
+### 鍵なし room
+
+- 鍵なし room は room list に表示する
+- `hasPassword: false` を返す
 - パスワードなしで参加できる
 
-### Private room
+### 鍵付き room
 
-- private room も room list に表示する
-- room list では private room に鍵アイコンを表示できるように `visibility: 'private'` または `hasPassword: true` を返す
-- private room への join は、player と spectator のどちらでもパスワードを必須にする
+- 鍵付き room も room list に表示する
+- room list には `roomId`, `roomName`, `hasPassword`, `currentPlayerCount`, `currentSpectatorCount`, `maxPlayers`, `status` を含める
+- 鍵付き room への join は、player と spectator のどちらでもパスワードを必須にする
 - room が `lobby` の場合、パスワード検証後に player として join できる
 - room が `playing` の場合、パスワード検証後に spectator として join できる
 - パスワードが設定されている場合、signaling server が検証する
@@ -229,7 +233,7 @@ interface RoomMetadata {
 - 開発用の簡易実装でも、最低限 `crypto.scrypt` などで password hash を保存する
 
 ```ts
-interface PrivateRoomAuth {
+interface RoomPasswordAuth {
   roomId: RoomId;
   passwordHash: string;
   passwordSalt: string;
@@ -241,7 +245,7 @@ interface PrivateRoomAuth {
 
 - HTTP のまま外部公開すると、パスワードは通信経路上で保護されません
 - 外部公開時は HTTPS/WSS を必須にする
-- private room のパスワードは「参加ゲート」であり、P2P 接続後の不正操作を防ぐものではありません
+- 鍵付き room のパスワードは「参加ゲート」であり、P2P 接続後の不正操作を防ぐものではありません
 
 ## 7. Signaling server 仕様
 
@@ -259,7 +263,6 @@ GET  /health
 GET  /rooms
 POST /rooms
 POST /rooms/:roomId/join
-POST /rooms/:roomId/close
 ```
 
 ### Create room request
@@ -267,7 +270,6 @@ POST /rooms/:roomId/close
 ```ts
 interface CreateRoomRequest {
   roomName: string;
-  visibility: RoomVisibility;
   password?: string;
   maxPlayers: 6;
   hostDisplayName: string;
@@ -327,7 +329,6 @@ type SignalingServerMessage =
   | { type: 'offer'; fromPeerId: PeerId; description: RTCSessionDescriptionInit }
   | { type: 'answer'; fromPeerId: PeerId; description: RTCSessionDescriptionInit }
   | { type: 'ice_candidate'; fromPeerId: PeerId; candidate: RTCIceCandidateInit }
-  | { type: 'room_closed'; reason: string }
   | { type: 'error'; code: string; message: string };
 ```
 
@@ -553,8 +554,7 @@ interface CommandRejected {
     | 'illegal_move'
     | 'stale_revision'
     | 'game_not_ready'
-    | 'unknown_player'
-    | 'room_closed';
+    | 'unknown_player';
   expectedRevision: Revision;
 }
 ```
@@ -964,7 +964,7 @@ spectator の制約:
 - 新しい `PeerId` に対して full mesh を作り直す
 - current host が snapshot を送る
 
-## 15. Private room の参加フロー
+## 15. 鍵付き room の参加フロー
 
 ```mermaid
 sequenceDiagram
@@ -972,7 +972,7 @@ sequenceDiagram
   participant S as Node signaling server
   participant B as Joining browser
 
-  A->>S: POST /rooms visibility=private password
+  A->>S: POST /rooms password
   S->>S: hash password
   S-->>A: roomId + signalingToken
   B->>S: POST /rooms/:roomId/join password
@@ -989,14 +989,14 @@ sequenceDiagram
 
 ```ts
 interface JoinRoomError {
-  code: 'room_not_found' | 'room_full' | 'password_required' | 'invalid_password' | 'room_closed';
+  code: 'room_full' | 'password_required' | 'invalid_password';
   message: string;
 }
 ```
 
 `room_full` は、`status === 'lobby'` で player として参加しようとしたときに `currentPlayerCount >= maxPlayers` の場合だけ返します。
 `status === 'playing'` の room では、7人目以上でも player ではなく spectator として参加を許可します。
-private room の場合も、spectator join にはパスワード検証を必須にします。
+鍵付き room の場合も、spectator join にはパスワード検証を必須にします。
 
 ## 16. エラー処理
 
@@ -1057,7 +1057,7 @@ WebRTC DataChannel は DTLS により暗号化されます。
 - player peer が DevTools で複製済みの他人の手札を見る行為
 - 改造クライアントによる不正 command 送信
 - 悪意ある host による不正 event commit
-- private room password を知っている人の再配布
+- 鍵付き room password を知っている人の再配布
 
 公開サービスにする場合は、次のどれかが必要です。
 
@@ -1133,7 +1133,7 @@ P2P の動作確認では、少なくとも Peer A、Peer B、Peer C を別々�
 
 ### Two-peer minimum flow
 
-1. Peer A が public room を作る
+1. Peer A が鍵なし room を作る
 2. Peer B が room list から参加する
 3. Peer A/B の WebRTC DataChannel が open になる
 4. Peer A がゲーム開始する
@@ -1143,10 +1143,10 @@ P2P の動作確認では、少なくとも Peer A、Peer B、Peer C を別々�
 8. Peer A に盤面更新が反映される
 9. 両 peer の `revision` と `stateHash` が一致する
 
-### Private room flow
+### 鍵付き room flow
 
-1. Peer A が private room を作り、パスワードを設定する
-2. Peer B の room list に鍵アイコン付きで private room が表示される
+1. Peer A が鍵付き room を作り、パスワードを設定する
+2. Peer B の room list に鍵アイコン付きで同じ room が表示される
 3. Peer B が誤ったパスワードで join し、失敗する
 4. Peer B が正しいパスワードで join し、成功する
 5. WebRTC 接続後、signaling server がゲーム状態を持っていないことを確認する
@@ -1214,7 +1214,7 @@ P2P の動作確認では、少なくとも Peer A、Peer B、Peer C を別々�
 9. full mesh を最大6人まで広げる
 10. host heartbeat と host migration を実装する
 11. spectator 用の redacted snapshot を実装する
-12. private room password を実装する
+12. 鍵付き room password を実装する
 13. Playwright MCP で Peer A/B/C、必要に応じて D/E/F と spectator を検証する
 
 ## 21. 参考リンク

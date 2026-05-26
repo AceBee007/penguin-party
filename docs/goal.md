@@ -37,7 +37,7 @@
 
 - P2P 通信
 - ルーム一覧
-- private room
+- 鍵付き room
 - パスワード
 - 複数ブラウザ間同期
 - host migration
@@ -87,7 +87,7 @@
 - 6人 full mesh
 - host migration
 - reconnect
-- private room password の完全実装
+- 鍵付き room password の完全実装
 - フルゲーム完走の P2P 保証
 
 ### 完了条件
@@ -131,7 +131,7 @@ player 上限は6人ですが、ゲーム中の途中参加は spectator とし�
 - playing 中の7人目以降の参加は spectator として許可する
 - spectator は `playerId: null` とし、手札、山札順、配札順、非公開乱数 seed を受け取らない
 - spectator は各 player のカード所持数と場のピラミッドだけをリアルタイムに見られる
-- private room は一覧に表示し、player/spectator のどちらの参加でもパスワードを必須にする
+- 鍵付き room も一覧に表示し、player/spectator のどちらの参加でもパスワードを必須にする
 - host heartbeat を実装する
 - host 切断時に deterministic random election で次 host を選べる
 - 新 host が game logic を継続できる
@@ -171,7 +171,7 @@ player 上限は6人ですが、ゲーム中の途中参加は spectator とし�
 - host migration 対応済みの `src/network/hostElection.ts`
 - 6人 P2P e2e test
 - spectator join e2e test
-- private room password e2e test
+- 鍵付き room password e2e test
 - host disconnect e2e test
 
 ## 実装順序の原則

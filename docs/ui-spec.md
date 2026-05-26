@@ -7,14 +7,15 @@
 
 UI の目的は、2〜6人の P2P マルチプレイを次の流れで遊べるようにすることです。
 
-1. ルーム一覧を見る
-2. ルームを作成する、または既存ルームに参加する
-3. ゲーム開始まで待機する
-4. 手札からカードをドラッグして場に出す
-5. 脱落、上がり、ラウンド終了、ゲーム終了を視覚的に理解できる
-6. ゲーム終了後に今回の結果と累積ランキングを見る
+1. Landing page でプレイヤー名を設定して開始する
+2. ルーム一覧を見る
+3. ルームを作成する、または既存ルームに参加する
+4. ゲーム開始まで待機する
+5. 手札からカードをドラッグして場に出す
+6. 脱落、上がり、ラウンド終了、ゲーム終了を視覚的に理解できる
+7. ゲーム終了後に今回の結果と累積ランキングを見る
 
-起動時のデフォルト画面は P2P マルチプレイです。
+起動時のデフォルト画面は `landing_page` です。
 ローカル検証モードはテスト用の入口として `?mode=local-test` を指定した場合だけ表示します。
 
 ## 2. 画面一覧
@@ -23,6 +24,7 @@ UI の目的は、2〜6人の P2P マルチプレイを次の流れで遊べる�
 
 ```ts
 type AppScene =
+  | 'landing_page'
   | 'matchmaking_lobby'
   | 'waiting_room'
   | 'game_play'
@@ -46,7 +48,7 @@ type AppDialog =
 ### 接続状況インジケーター
 
 すべてのゲームシーンの左上に、常時接続状況を表示します。
-対象シーンは `matchmaking_lobby`、`waiting_room`、`game_play`、`game_result` です。
+対象シーンは `matchmaking_lobby`、`waiting_room`、`game_play`、`round_result`、`game_result` です。
 
 表示内容:
 
@@ -78,58 +80,20 @@ interface ConnectionIndicatorView {
 - アイコンだけに依存せず、`aria-label` でも接続状態を読めるようにする
 - 左上に固定表示するが、ゲームのカードや重要 UI を隠さない余白を確保する
 
-## 4. Matchmaking Lobby
+## 4. Landing Page
 
 ### 目的
 
-プレイヤーがルームを作成するか、既存ルームを選んで参加できる画面です。
+起動直後に表示する最初の画面です。
+ゲームタイトル、プレイヤー名設定、「Start」ボタンだけを表示し、room 一覧は表示しません。
 
 ### レイアウト
 
-landing page は、左側に現在 open しているすべてのルーム一覧、右側にタイトルと補助情報を表示します。
-viewport の最下部には、常に floating の大きな「新しいゲームルームを作成」ボタンを表示します。
-ボタンは画面幅に応じて中央寄せまたは横幅いっぱいに近い形で表示し、ルーム一覧のスクロールに追従せず viewport に固定します。
-
-タイトル直下には、現在のプレイヤー名を編集できる入力欄を表示します。
-デフォルト値は `Player_random_6digit_hash` 形式です。
-例: `Player_a3f91c`
-
-左側のルーム一覧は、ルーム数が多い場合に下方向へスクロールできるようにします。
-一覧の scroll container は、viewport 下部の floating button と重ならない bottom padding を持ちます。
-
 ```txt
-[接続状況]
-
 Penguin Party
 [Player_a3f91c____________]
 
-┌ Open rooms ───────────────┐
-│ 部屋名 A            2/6   │  Waiting
-│ 🔒 部屋名 B         4/6   │  Playing
-│ 部屋名 C            1/6   │  Waiting
-│ ... scroll ...            │
-└───────────────────────────┘
-
-                         [新しいゲームルームを作成]
-```
-
-推奨レイアウト:
-
-```txt
-desktop
---------------------------------
-| room list | title / player info |
-| scroll    | status / help       |
---------------------------------
-[floating create room button]
-
-mobile
---------------------------------
-title
-player name
-room list
---------------------------------
-[floating create room button]
+[Start]
 ```
 
 ### プレイヤー名入力
@@ -158,7 +122,58 @@ Validation:
 - 名前は必須
 - 名前は空白だけを禁止
 - 名前は最大16文字
-- invalid の場合、room 作成と room 参加を disabled にする
+- invalid の場合、`Start` ボタンを disabled にする
+
+### 操作
+
+- `Start`: プレイヤー名が valid なら `matchmaking_lobby` へ遷移する
+
+## 5. Matchmaking Lobby
+
+### 目的
+
+プレイヤーがルームを作成するか、既存ルームを選んで参加できる画面です。
+
+### レイアウト
+
+matchmaking lobby は、現在 open しているすべての room を一覧表示します。
+room は `lobby` または `playing` のものだけを表示します。
+誰もいなくなった room は signaling server が自動削除し、room list には表示しません。
+viewport の最下部には、常に floating の大きな「新しいゲームルームを作成」ボタンを表示します。
+ボタンは画面幅に応じて中央寄せまたは横幅いっぱいに近い形で表示し、ルーム一覧のスクロールに追従せず viewport に固定します。
+
+左側のルーム一覧は、ルーム数が多い場合に下方向へスクロールできるようにします。
+一覧の scroll container は、viewport 下部の floating button と重ならない bottom padding を持ちます。
+
+```txt
+[接続状況]
+
+┌ Open rooms ───────────────┐
+│ 部屋名 A            2/6   │  Lobby
+│ 🔒 部屋名 B         4/6   │  Playing
+│ 部屋名 C            1/6   │  Lobby
+│ ... scroll ...            │
+└───────────────────────────┘
+
+                         [新しいゲームルームを作成]
+```
+
+推奨レイアウト:
+
+```txt
+desktop
+--------------------------------
+| room list                       |
+| scroll                          |
+--------------------------------
+[floating create room button]
+
+mobile
+--------------------------------
+room list
+--------------------------------
+[floating create room button]
+```
 
 ### ルームリスト項目
 
@@ -179,7 +194,7 @@ interface RoomListItemView {
   currentPlayerCount: number;
   currentSpectatorCount: number;
   maxPlayers: 6;
-  status: 'waiting' | 'playing' | 'closed';
+  status: 'lobby' | 'playing';
   canJoin: boolean;
   joinRole: 'player' | 'spectator' | null;
 }
@@ -190,14 +205,15 @@ interface RoomListItemView {
 - パスワードなし room は鍵アイコンなし
 - パスワード付き room はルーム名の左、または右端に鍵アイコンを表示する
 - 鍵アイコンには「パスワードあり」の意味が伝わる `aria-label` を付ける
-- `status === 'waiting'` は「開始待ち」と表示する
+- `status === 'lobby'` は「開始待ち」と表示する
 - `status === 'playing'` は「プレイ中」と表示する
 - `canJoin === false` のルームは disabled 表示にする
 - `status === 'playing'` のルームは観戦者として参加できる
 - `status === 'playing'` のルームには「観戦」または spectator badge を表示する
 - `currentPlayerCount >= maxPlayers` のルームは満員表示にする
-- `status === 'waiting'` かつ `currentPlayerCount >= maxPlayers` のルームは player として参加できない
+- `status === 'lobby'` かつ `currentPlayerCount >= maxPlayers` のルームは player として参加できない
 - 満員でも `status === 'playing'` の場合は spectator として参加可能にしてよい
+- `closed` status は持たない。参加者が0人になった room は自動削除され、一覧から消える
 
 ### 操作
 
@@ -220,10 +236,10 @@ viewport 最下部に floating 表示します。
 
 遷移先:
 
-- `status === 'waiting'`: player として `waiting_room` へ遷移する
+- `status === 'lobby'`: player として `waiting_room` へ遷移する
 - `status === 'playing'`: spectator として `game_play` へ遷移する
 
-## 5. Create Room Dialog
+## 6. Create Room Dialog
 
 ### 目的
 
@@ -260,12 +276,14 @@ interface CreateRoomFormState {
 dialog 表示中は背景を inert にし、focus は dialog 内に閉じ込めます。
 作成が成功したら dialog を閉じ、host として `waiting_room` へ遷移します。
 
-### private room 判定
+### 鍵付き room 判定
 
-パスワード欄に1文字以上入力された場合、そのルームは private room として作成します。
+パスワード欄に1文字以上入力された場合、その room は鍵付き room として作成します。
+鍵付き room も room list には表示します。
+room の存在を隠すための `private` / `public` 区分は持たず、必要なのは `hasPassword` だけです。
 
 ```ts
-const visibility = password.trim().length > 0 ? 'private' : 'public';
+const hasPassword = password.trim().length > 0;
 ```
 
 ### ヒントメッセージ
@@ -279,7 +297,7 @@ const visibility = password.trim().length > 0 ? 'private' : 'public';
 パスワードが入力済みの場合は、より明確に次の表示へ切り替えてもよいです。
 
 ```txt
-このルームはプライベートルームとして作成されます。
+このルームは鍵付きルームとして作成されます。
 ```
 
 ### Validation
@@ -289,7 +307,7 @@ const visibility = password.trim().length > 0 ? 'private' : 'public';
 - ルーム名は最大32文字
 - パスワードは任意
 - パスワードは最大20文字
-- パスワードが入力されている場合、private room として扱う
+- パスワードが入力されている場合、鍵付き room として扱う
 
 入力仕様:
 
@@ -297,7 +315,7 @@ const visibility = password.trim().length > 0 ? 'private' : 'public';
 - パスワードの `maxlength` は20
 - パスワードの表示/非表示 toggle は MVP では任意
 
-## 6. Player Name Input
+## 7. Player Name Input
 
 ### 目的
 
@@ -306,7 +324,7 @@ room 作成時、room 参加時、waiting room 表示名に同じ値を使いま
 
 ### 表示タイミング
 
-matchmaking lobby のタイトル直下に常時表示します。
+landing page のタイトル直下に常時表示します。
 
 ### レイアウト
 
@@ -320,7 +338,7 @@ Penguin Party
 - 入力欄をクリックまたは focus すると編集できる
 - blur または Enter で現在値を保存する
 - Escape では編集前の値へ戻してよい
-- 空欄や invalid な名前のまま room 作成・参加はできない
+- 空欄や invalid な名前のまま `matchmaking_lobby` へ進めない
 
 Validation:
 
@@ -328,9 +346,9 @@ Validation:
 - 名前は空白だけを禁止
 - 名前は最大16文字
 - invalid の場合は入力欄の近くに短いエラーを表示する
-- invalid の場合、floating create button と room list の参加操作を disabled にする
+- invalid の場合、`Start` ボタンを disabled にする
 
-## 7. Join Password Dialog
+## 8. Join Password Dialog
 
 ### 目的
 
@@ -367,10 +385,10 @@ Validation:
 - パスワードエラー時は dialog 内にエラーを表示し、dialog は閉じない
 
 ```ts
-type JoinPasswordError = 'required' | 'invalid_password' | 'room_closed' | 'room_full' | null;
+type JoinPasswordError = 'password_required' | 'invalid_password' | 'room_full' | null;
 ```
 
-## 8. Waiting Room
+## 9. Waiting Room
 
 ### 目的
 
@@ -439,7 +457,7 @@ Validation:
 - 最大6人まで参加可能
 - host 以外はゲーム開始できない
 
-## 9. Game Play
+## 10. Game Play
 
 ### 目的
 
@@ -506,7 +524,7 @@ Validation:
 
 - `退出`: spectator として room から退出し、matchmaking lobby へ戻る
 
-## 10. プレイ済みカード領域
+## 11. プレイ済みカード領域
 
 ### 表示内容
 
@@ -530,7 +548,7 @@ interface BoardSlotView {
 }
 ```
 
-## 11. 手札領域
+## 12. 手札領域
 
 ### ローカルプレイヤーの手札
 
@@ -580,7 +598,7 @@ interface DragPreviewState {
 - 盤面状態を変更しない
 - 必要なら軽い shake animation で失敗を示す
 
-## 12. 他プレイヤー手札数表示
+## 13. 他プレイヤー手札数表示
 
 ### 目的
 
@@ -618,7 +636,7 @@ interface OpponentHandView {
 }
 ```
 
-## 13. 脱落表示
+## 14. 脱落表示
 
 ### 条件
 
@@ -641,7 +659,7 @@ interface OpponentHandView {
 
 他プレイヤーの手札数エリアをグレーアウトし、「脱落」badge を表示します。
 
-## 14. 上がり表示
+## 15. 上がり表示
 
 ### 条件
 
@@ -662,7 +680,7 @@ interface OpponentHandView {
 
 他プレイヤーの手札数エリアに「上がり」badge を表示します。
 
-## 15. Round Result / Game Result
+## 16. Round Result / Game Result
 
 ### 目的
 
@@ -748,36 +766,43 @@ interface FinalStandingView {
 - 「もう一度遊ぶ」は同じ room で新しいゲームを作り直し、`waiting_room` または新ゲームの準備画面へ戻る
 - host authoritative なので、primary action の確定は host の command として扱う
 
-## 16. 主要ユーザーフロー
+## 17. 主要ユーザーフロー
 
-### Public room 作成
+### Landing page から room list へ
 
-1. lobby で floating の「新しいゲームルームを作成」を押す
+1. 起動時に `landing_page` を表示する
+2. プレイヤー名を確認または編集する
+3. `Start` を押す
+4. `matchmaking_lobby` へ遷移し、現在 open している room list を表示する
+
+### 鍵なし room 作成
+
+1. matchmaking lobby で floating の「新しいゲームルームを作成」を押す
 2. `create_room` dialog でルーム名だけ入力する
 3. 「作成」を押す
 4. waiting room へ遷移する
 5. host として「ゲーム開始」ボタンが表示される
 
-### Private room 作成
+### 鍵付き room 作成
 
-1. lobby で floating の「新しいゲームルームを作成」を押す
+1. matchmaking lobby で floating の「新しいゲームルームを作成」を押す
 2. `create_room` dialog でルーム名を入力する
 3. パスワード欄に入力する
-4. private room のヒントが表示される
+4. 鍵付き room のヒントが表示される
 5. 「作成」を押す
 6. waiting room へ遷移する
 
-### Public room 参加
+### 鍵なし room 参加
 
-1. lobby のタイトル下にあるプレイヤー名入力が valid であることを確認する
-2. lobby で `status === 'waiting'` のパスワードなし room をクリックする
+1. landing page で設定したプレイヤー名が valid であることを確認する
+2. matchmaking lobby で `status === 'lobby'` のパスワードなし room をクリックする
 3. そのまま参加処理を実行する
 4. player として waiting room へ遷移する
 
-### Private room 参加
+### 鍵付き room 参加
 
-1. lobby のタイトル下にあるプレイヤー名入力が valid であることを確認する
-2. lobby で `status === 'waiting'` の鍵アイコン付き room をクリックする
+1. landing page で設定したプレイヤー名が valid であることを確認する
+2. matchmaking lobby で `status === 'lobby'` の鍵アイコン付き room をクリックする
 3. `join_password` dialog が表示される
 4. パスワードを入力する
 5. 「参加」を押す
@@ -800,7 +825,7 @@ interface FinalStandingView {
 
 ### ゲーム中の途中参加
 
-1. lobby で `status === 'playing'` の room をクリックする
+1. matchmaking lobby で `status === 'playing'` の room をクリックする
 2. パスワードなし room の場合はそのまま参加処理を実行する
 3. パスワード付き room の場合は `join_password` dialog でパスワードを入力する
 4. spectator として `game_play` へ遷移する
@@ -811,7 +836,7 @@ interface FinalStandingView {
 9. spectator 画面の右上に「退出」ボタンを表示する
 10. 以後の player action は spectator の画面にも同期される
 
-## 17. 実装コンポーネント案
+## 18. 実装コンポーネント案
 
 React 実装では、次のコンポーネント分割を推奨します。
 
@@ -819,6 +844,7 @@ React 実装では、次のコンポーネント分割を推奨します。
 src/ui/
   AppShell.tsx
   ConnectionIndicator.tsx
+  LandingPage.tsx
   MatchmakingLobby.tsx
   PlayerNameField.tsx
   RoomList.tsx
@@ -839,21 +865,23 @@ src/ui/
 PixiJS で盤面とカードを描画する場合も、画面遷移、dialog、接続表示、結果表示は React 側で管理します。
 PixiJS 側は `BoardView` と `LocalHandView` の描画・ドラッグ操作に集中させます。
 
-## 18. アクセシビリティ
+## 19. アクセシビリティ
 
 - dialog は focus trap を持つ
 - dialog を閉じたら元の操作対象へ focus を戻す
 - 「確定」「参加」「作成」「ゲーム開始」は keyboard で操作可能にする
 - 接続状態は色だけでなく `aria-label` またはテキストでも伝える
-- 鍵アイコンは private room を示す `aria-label` を持つ
+- 鍵アイコンはパスワード付き room を示す `aria-label` を持つ
 - カード drag は将来的に keyboard 操作も検討する
 
-## 19. 確定事項と残りの要確認
+## 20. 確定事項と残りの要確認
 
 ### 確定事項
 
-- private room は lobby の room list に表示する
-- private room は鍵アイコン付きで表示する
+- room は `lobby` と `playing` の2状態だけを持つ
+- 参加者が0人になった room は自動削除され、room list には表示しない
+- 鍵付き room も matchmaking lobby の room list に表示する
+- 鍵付き room は鍵アイコン付きで表示する
 - player は最大6人
 - lobby 中の7人目 player join は拒否する
 - playing 中の7人目以降の join は spectator として許可する
