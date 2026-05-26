@@ -17,7 +17,7 @@ test('runs six player mesh, spectator join, private password, room full, and hos
   const spectator = await openPeer(browser, 'Spectator S', { width: 1280, height: 720 });
 
   try {
-    await peers[0].page.goto('/?mode=multiplayer');
+    await peers[0].page.goto('/');
     await peers[0].page.locator('[data-create-password]').fill('iceberg');
     await peers[0].page.getByRole('button', { name: 'Create room' }).click();
     await expect(peers[0].page.locator('[data-room-id]')).toBeVisible();
@@ -49,7 +49,7 @@ test('runs six player mesh, spectator join, private password, room full, and hos
       }
     }
 
-    await rejectedPeer.page.goto('/?mode=multiplayer');
+    await rejectedPeer.page.goto('/');
     await rejectedPeer.page.locator('[data-room-code-input]').fill(roomId);
     await rejectedPeer.page.locator('[data-join-name]').fill(rejectedPeer.name);
     await rejectedPeer.page.locator('[data-join-password]').fill('iceberg');
@@ -153,7 +153,7 @@ async function openPeer(browser: Browser, name: string, viewport: { width: numbe
 }
 
 async function joinRoom(page: Page, roomId: string, name: string, password: string) {
-  await page.goto('/?mode=multiplayer');
+  await page.goto('/');
   await page.locator('[data-room-code-input]').fill(roomId);
   await page.locator('[data-join-name]').fill(name);
   await page.locator('[data-join-password]').fill(password);

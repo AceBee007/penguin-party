@@ -403,7 +403,7 @@ export function MultiplayerGame() {
                     Start game
                   </button>
                 ) : null}
-                <button type="button" onClick={() => window.location.assign('/?mode=multiplayer')}>
+                <button type="button" onClick={() => window.location.assign('/')}>
                   Leave
                 </button>
               </div>

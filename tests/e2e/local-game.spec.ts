@@ -13,7 +13,7 @@ test('renders the local Pixi game and commits a drag/drop move', async ({ page }
     failedRequests.push(`${request.method()} ${request.url()}`);
   });
 
-  await page.goto('/');
+  await page.goto('/?mode=local-test');
 
   await expect(page.getByRole('heading', { name: 'Penguin Party' })).toBeVisible();
   await expect(page.getByText('Local verification mode')).toBeVisible();

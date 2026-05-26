@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import type { LegalMove } from './game/types';
 
@@ -30,7 +30,22 @@ vi.mock('./components/PixiDragStage', () => ({
 }));
 
 describe('App', () => {
-  it('renders the local verification game shell', () => {
+  beforeEach(() => {
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('renders the multiplayer lobby by default', () => {
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: 'Penguin Party' })).toBeInTheDocument();
+    expect(screen.getByText('P2P party room')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Create room' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Join room' })).toBeInTheDocument();
+  });
+
+  it('renders the local verification game shell for local-test mode', () => {
+    window.history.replaceState({}, '', '/?mode=local-test');
+
     const { container } = render(<App />);
 
     expect(screen.getByRole('heading', { name: 'Penguin Party' })).toBeInTheDocument();
@@ -41,6 +56,8 @@ describe('App', () => {
   });
 
   it('updates the board and hand metrics after the Pixi stage plays a card', () => {
+    window.history.replaceState({}, '', '/?mode=local-test');
+
     const { container } = render(<App />);
 
     expect(container.querySelector('[data-selected-card]')).toHaveTextContent('Ready');

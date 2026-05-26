@@ -5,8 +5,8 @@ test('syncs one host move and one joiner move over WebRTC DataChannel', async ({
   const peerB = await openPeer(browser, { width: 1280, height: 720 });
 
   try {
-    await peerA.page.goto('/?mode=multiplayer');
-    await peerB.page.goto('/?mode=multiplayer');
+    await peerA.page.goto('/');
+    await peerB.page.goto('/');
 
     await peerA.page.getByRole('button', { name: 'Create room' }).click();
     await expect(peerA.page.locator('[data-room-id]')).toBeVisible();

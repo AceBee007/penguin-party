@@ -20,13 +20,14 @@ const INITIAL_DRAG_STATUS: StageDragStatus = {
 };
 
 export function App() {
-  const isMultiplayerMode = new URLSearchParams(window.location.search).get('mode') === 'multiplayer';
+  const mode = new URLSearchParams(window.location.search).get('mode');
+  const isLocalTestMode = mode === 'local-test';
 
-  if (isMultiplayerMode) {
-    return <MultiplayerGame />;
+  if (isLocalTestMode) {
+    return <LocalGame />;
   }
 
-  return <LocalGame />;
+  return <MultiplayerGame />;
 }
 
 function LocalGame() {
