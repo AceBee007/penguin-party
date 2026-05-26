@@ -1,38 +1,29 @@
-# Bug solution: 手札 drag/drop の重複表示とピラミッド配置
+# Bug solution: 小さい viewport で高いピラミッドが見切れる
 
 ## 発見したバグ
 
-- 手札を少しだけドラッグして手を離すと、ドラッグしたカードが手札に戻らず、元の手札位置にも同じカードが描画される。結果として同じカードが2枚あるように見える。
-- 手札カードをボードへドラッグして、ヒントで提示された合法位置以外で手を離すと、カードがそのドラッグ位置に残ってしまう。本来は自動で手札に戻るべき。
-- 上段のカードが、支えになる下段2枚の中央ではなく、左側のカード寄りに表示されている。
+- ピラミッドを積み上げると、window / viewport が小さい場合にピラミッドの高さが表示領域を超える。
+- 上段のカードや合法手のヒントが画面外に出ると、プレイヤがピラミッド全体を確認できず、それ以上プレイを続けにくくなる。
 
 ## 原因
 
-- PixiJS の drag 中、カードの `Container` は `handLayer` から `dragLayer` に移動される。invalid drop 時に手札は再描画されていたが、`dragLayer` に残った古い `Container` を取り除いていなかったため、同じ `cardId` のカードが視覚上だけ二重に見えていた。
-- ゲーム状態は `cardId` を中心に管理しているが、`playCard` の直前に「そのカードが手札に1枚だけ存在する」「盤面や played list に存在しない」という不変条件を明示的に検査していなかった。
-- ルール上の上段座標 `{ level: 1, x: 0 }` は、下段 `{ level: 0, x: 0 }` と `{ level: 0, x: 1 }` の上に置く位置を表す。描画側でこの `x` をそのまま使っていたため、上段カードが左寄りになっていた。
+- 盤面カードのサイズは主に横幅から決まっており、現在のピラミッド高さや次に置ける合法手の最大 `level` を考慮していなかった。
+- `baseY` は `height * 0.55` 付近に固定され、ピラミッドが高くなったときに上方向へ伸びるカード列を viewport 内へ収める再計算がなかった。
+- 手札領域も盤面の下側に必要なので、盤面だけでなく「最上段カードから手札下端まで」の縦方向全体を見て縮小する必要があった。
 
 ## 修正方針
 
-- drop 完了時、合法・非合法に関係なく、drag 中の `Container` を `dragLayer` から明示的に削除する。
-- drag 中でない再描画では `dragLayer` を空にし、古い drag 表示が残らないようにする。
-- invalid drop の場合は、drag 表示を消した後に手札を再描画し、カードを元の手札位置へ戻す。
-- `playCard` の commit 前にカード所有の不変条件を検査する。
-  - target cell が空であること
-  - card がすでに盤面に存在しないこと
-  - card がすでに `playedCardIds` に存在しないこと
-  - card が active player の手札にちょうど1枚だけ存在し、他 player の手札には存在しないこと
-- 盤面描画では `visualX = x + level * 0.5` を使い、上段カードを支え2枚の中央に描画する。
+- 盤面 geometry を `createBoardGeometry` に切り出し、カード描画に必要な縦方向の高さを計算する。
+- 現在の盤面カードと合法手の両方から最大 `level` を求める。
+- `maxLevel` が高く、最上段カードから手札下端までが viewport に収まらない場合、カード幅・カード高さ・段間隔を同じ比率で縮小する。
+- 縮小後の `baseY` は、以下が viewport 内に収まる範囲へ clamp する。
+  - 最上段カードの上端
+  - 手札カードの下端
+- 狭い画面では CSS の play area 最小高も viewport 比率に合わせ、canvas 自体が過剰に縦長になって viewport 外へ押し出されないようにする。
+- 横方向の配置は既存の `visualX = x + level * 0.5` を維持し、上段カードは支え2枚の中央に置く。
 
 ## 検証
 
-- unit test で、手札内の同一 `cardId` 重複、盤面上にあるカードの再プレイ、上段カードの視覚座標を検査する。
-- local e2e で、短い invalid drag を実行し、以下を確認する。
-  - board count が変わらない
-  - active player が変わらない
-  - revision が変わらない
-  - readout が手札へ戻った状態を示す
-  - `dragLayerChildren` が `0` になる
-  - hand の描画枚数が手札枚数と一致する
-- local e2e と Playwright QA で、valid drag/drop 後に board、hand、revision、active player が正常に更新されることを確認する。
-- Playwright QA で、上段カードの center x が支え2枚の center x 平均と一致することを確認する。
+- unit test で、短い viewport かつ高い `maxLevel` のときに `scale < 1` になり、`boardTopY` と `handBottomY` が viewport 内に収まることを確認する。
+- Playwright で小さい viewport を開き、高い段の合法手が出るまでプレイしても、盤面の上端と手札下端が表示領域内に残ることを確認する。
+- 既存の local / multiplayer e2e が引き続き通ることを確認する。

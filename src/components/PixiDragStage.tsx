@@ -9,7 +9,7 @@ import {
 } from 'pixi.js';
 import { CARD_COLOR_LABELS, getCurrentRoundPlayer, sameTarget } from '../game/rules';
 import type { CardColor, CardId, GameSessionState, LegalMove, MoveTarget, PlayerId } from '../game/types';
-import { getVisualBoardX } from './boardGeometry';
+import { createBoardGeometry, getVisualBoardX } from './boardGeometry';
 
 interface PixiDragStageProps {
   game: GameSessionState;
@@ -40,6 +40,9 @@ interface BoardLayout {
   rowRise: number;
   originX: number;
   baseY: number;
+  boardTopY: number;
+  handBottomY: number;
+  scale: number;
 }
 
 interface DragState {
@@ -399,6 +402,9 @@ function drawHand(
     handCards: stageDebugCards,
     handLayerChildren: handLayer.children.length,
     dragLayerChildren: dragLayer.children.length,
+    boardTopY: boardLayout.boardTopY,
+    handBottomY: boardLayout.handBottomY,
+    scale: boardLayout.scale,
   };
 }
 
@@ -467,30 +473,22 @@ function drawCenteredLabel(layer: Container, label: string, x: number, y: number
 }
 
 function createBoardLayout(width: number, height: number, game: GameSessionState, legalMoves: LegalMove[]): BoardLayout {
-  const availableWidth = Math.max(288, width - 60);
-  const cardWidth = Math.min(78, Math.max(42, availableWidth / 9.7));
-  const cardHeight = cardWidth * 1.28;
   const board = game.currentRound?.board;
   const xValues = [
     ...(board?.occupiedCellKeys.map((key) => getVisualBoardX(board.cardsByCell[key])) ?? []),
     ...legalMoves.map((move) => getVisualBoardX(move.target)),
     0,
   ];
+  const levelValues = [
+    ...(board?.occupiedCellKeys.map((key) => board.cardsByCell[key].level) ?? []),
+    ...legalMoves.map((move) => move.target.level),
+    0,
+  ];
   const minX = Math.min(...xValues);
   const maxX = Math.max(...xValues);
-  const columns = Math.max(1, maxX - minX + 1);
-  const gapX = Math.min(cardWidth + 10, availableWidth / Math.max(1, columns));
-  const originX = width / 2 - ((minX + maxX) / 2) * gapX;
-  const baseY = Math.min(height * 0.55, height - cardHeight * 2.95);
+  const maxLevel = Math.max(...levelValues);
 
-  return {
-    cardWidth,
-    cardHeight,
-    gapX,
-    rowRise: cardHeight * 0.8,
-    originX,
-    baseY,
-  };
+  return createBoardGeometry({ width, height, minVisualX: minX, maxVisualX: maxX, maxLevel });
 }
 
 function getCardLayoutForTarget(layout: BoardLayout, target: MoveTarget): CardLayout {
