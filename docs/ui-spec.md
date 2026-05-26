@@ -24,7 +24,6 @@ UI の目的は、2〜6人の P2P マルチプレイを次の流れで遊べる�
 ```ts
 type AppScene =
   | 'matchmaking_lobby'
-  | 'create_room'
   | 'waiting_room'
   | 'game_play'
   | 'round_result'
@@ -35,7 +34,7 @@ type AppScene =
 
 ```ts
 type AppDialog =
-  | 'join_name'
+  | 'create_room'
   | 'join_password'
   | 'leave_room_confirm'
   | 'connection_error'
@@ -47,7 +46,7 @@ type AppDialog =
 ### 接続状況インジケーター
 
 すべてのゲームシーンの左上に、常時接続状況を表示します。
-対象シーンは `matchmaking_lobby`、`create_room`、`waiting_room`、`game_play`、`game_result` です。
+対象シーンは `matchmaking_lobby`、`waiting_room`、`game_play`、`game_result` です。
 
 表示内容:
 
@@ -87,21 +86,79 @@ interface ConnectionIndicatorView {
 
 ### レイアウト
 
-画面上部に「ルームを作成」ボタンを表示します。
-その下に、既存ルームをリスト形式で表示します。
+landing page は、左側に現在 open しているすべてのルーム一覧、右側にタイトルと補助情報を表示します。
+viewport の最下部には、常に floating の大きな「新しいゲームルームを作成」ボタンを表示します。
+ボタンは画面幅に応じて中央寄せまたは横幅いっぱいに近い形で表示し、ルーム一覧のスクロールに追従せず viewport に固定します。
+
+タイトル直下には、現在のプレイヤー名を編集できる入力欄を表示します。
+デフォルト値は `Player_random_6digit_hash` 形式です。
+例: `Player_a3f91c`
+
+左側のルーム一覧は、ルーム数が多い場合に下方向へスクロールできるようにします。
+一覧の scroll container は、viewport 下部の floating button と重ならない bottom padding を持ちます。
 
 ```txt
 [接続状況]
 
-[ルームを作成]
+Penguin Party
+[Player_a3f91c____________]
 
-ルーム一覧
---------------------------------
-部屋名 A                 2/6
-🔒 部屋名 B              4/6
-部屋名 C                 1/6
---------------------------------
+┌ Open rooms ───────────────┐
+│ 部屋名 A            2/6   │  Waiting
+│ 🔒 部屋名 B         4/6   │  Playing
+│ 部屋名 C            1/6   │  Waiting
+│ ... scroll ...            │
+└───────────────────────────┘
+
+                         [新しいゲームルームを作成]
 ```
+
+推奨レイアウト:
+
+```txt
+desktop
+--------------------------------
+| room list | title / player info |
+| scroll    | status / help       |
+--------------------------------
+[floating create room button]
+
+mobile
+--------------------------------
+title
+player name
+room list
+--------------------------------
+[floating create room button]
+```
+
+### プレイヤー名入力
+
+タイトル直下に表示します。
+クリックまたは focus するとユーザーが自分で更新できます。
+
+```ts
+interface LobbyPlayerNameView {
+  displayName: string;
+  defaultDisplayName: string;
+  isValid: boolean;
+}
+```
+
+生成ルール:
+
+- 初回表示時に `Player_${random6digitHash}` を生成する
+- `random6digitHash` は6文字の英数字または hex 文字列にする
+- 例: `Player_92af10`
+- ユーザーが変更した名前は、room 作成・room 参加時にそのまま使う
+- 可能なら local storage に保存し、次回起動時も同じ名前を表示する
+
+Validation:
+
+- 名前は必須
+- 名前は空白だけを禁止
+- 名前は最大16文字
+- invalid の場合、room 作成と room 参加を disabled にする
 
 ### ルームリスト項目
 
@@ -109,18 +166,20 @@ interface ConnectionIndicatorView {
 
 - ルーム名
 - 現在参加人数 / 最大人数
-- private room の場合は鍵アイコン
-- room status
+- パスワード付き room の場合は鍵アイコン
+- 現在のゲーム状況
+- 参加可能かどうか
+- 必要に応じて観戦として入ることがわかる badge
 
 ```ts
 interface RoomListItemView {
   roomId: string;
   roomName: string;
-  visibility: 'public' | 'private';
+  hasPassword: boolean;
   currentPlayerCount: number;
   currentSpectatorCount: number;
   maxPlayers: 6;
-  status: 'lobby' | 'playing' | 'closed';
+  status: 'waiting' | 'playing' | 'closed';
   canJoin: boolean;
   joinRole: 'player' | 'spectator' | null;
 }
@@ -128,44 +187,48 @@ interface RoomListItemView {
 
 表示ルール:
 
-- public room は鍵アイコンなし
-- private room はルーム名の左、または右端に鍵アイコンを表示する
+- パスワードなし room は鍵アイコンなし
+- パスワード付き room はルーム名の左、または右端に鍵アイコンを表示する
+- 鍵アイコンには「パスワードあり」の意味が伝わる `aria-label` を付ける
+- `status === 'waiting'` は「開始待ち」と表示する
+- `status === 'playing'` は「プレイ中」と表示する
 - `canJoin === false` のルームは disabled 表示にする
 - `status === 'playing'` のルームは観戦者として参加できる
 - `status === 'playing'` のルームには「観戦」または spectator badge を表示する
 - `currentPlayerCount >= maxPlayers` のルームは満員表示にする
-- `status === 'lobby'` かつ `currentPlayerCount >= maxPlayers` のルームは player として参加できない
+- `status === 'waiting'` かつ `currentPlayerCount >= maxPlayers` のルームは player として参加できない
 - 満員でも `status === 'playing'` の場合は spectator として参加可能にしてよい
 
 ### 操作
 
-#### 「ルームを作成」ボタン
+#### 「新しいゲームルームを作成」ボタン
 
-クリックすると `create_room` 画面へ遷移します。
+viewport 最下部に floating 表示します。
+クリックすると `create_room` dialog を表示します。
 
 #### 既存ルームクリック
 
 ルーム名またはルーム行をクリックすると、参加フローを開始します。
+このとき、タイトル下のプレイヤー名入力欄にある名前を参加名として使用します。
 
 参加フロー:
 
-1. `join_name` dialog を表示する
-2. プレイヤー名を入力する
-3. 「確定」ボタンを押す
-4. private room の場合だけ `join_password` dialog を表示する
-5. パスワードが正しければ次の画面へ遷移する
-6. public room の場合は名前確定後に次の画面へ遷移する
+1. パスワードなし room の場合は、そのまま参加処理を実行する
+2. パスワード付き room の場合だけ `join_password` dialog を表示する
+3. パスワードが正しければ次の画面へ遷移する
+4. パスワードが不正なら dialog 内にエラーを表示し、lobby に留まる
 
 遷移先:
 
-- `status === 'lobby'`: player として `waiting_room` へ遷移する
+- `status === 'waiting'`: player として `waiting_room` へ遷移する
 - `status === 'playing'`: spectator として `game_play` へ遷移する
 
-## 5. Create Room
+## 5. Create Room Dialog
 
 ### 目的
 
-ホストが新しいルームを作成する画面です。
+ホストが新しいルームを作成する dialog です。
+matchmaking lobby から離脱せず、floating button から開きます。
 
 ### 入力項目
 
@@ -182,8 +245,6 @@ interface CreateRoomFormState {
 ### レイアウト
 
 ```txt
-[接続状況]
-
 ルームを作成
 
 ルーム名
@@ -195,6 +256,9 @@ interface CreateRoomFormState {
 
 [作成] [戻る]
 ```
+
+dialog 表示中は背景を inert にし、focus は dialog 内に閉じ込めます。
+作成が成功したら dialog を閉じ、host として `waiting_room` へ遷移します。
 
 ### private room 判定
 
@@ -233,45 +297,38 @@ const visibility = password.trim().length > 0 ? 'private' : 'public';
 - パスワードの `maxlength` は20
 - パスワードの表示/非表示 toggle は MVP では任意
 
-## 6. Join Name Dialog
+## 6. Player Name Input
 
 ### 目的
 
-既存ルームへ参加する前に、参加者の表示名を入力させる dialog です。
+landing page で自分のプレイヤー名を確認・編集できる入力欄です。
+room 作成時、room 参加時、waiting room 表示名に同じ値を使います。
 
 ### 表示タイミング
 
-matchmaking lobby で既存ルームをクリックした直後に表示します。
+matchmaking lobby のタイトル直下に常時表示します。
 
 ### レイアウト
 
 ```txt
-参加名を入力
-
-このルームで表示する名前を入力してください。
-
-名前
-[________________]
-
-[キャンセル] [確定]
+Penguin Party
+[Player_a3f91c____________]
 ```
 
 ### 操作
 
-- `キャンセル`: dialog を閉じ、lobby に戻る
-- `確定`: 名前を保存し、次の step へ進む
-
-次の step:
-
-- public room: room status に応じて `waiting_room` または spectator の `game_play` へ遷移
-- private room: `join_password` dialog を表示
+- 入力欄をクリックまたは focus すると編集できる
+- blur または Enter で現在値を保存する
+- Escape では編集前の値へ戻してよい
+- 空欄や invalid な名前のまま room 作成・参加はできない
 
 Validation:
 
 - 名前は必須
 - 名前は空白だけを禁止
 - 名前は最大16文字
-- `確定` ボタンは名前が valid になるまで disabled
+- invalid の場合は入力欄の近くに短いエラーを表示する
+- invalid の場合、floating create button と room list の参加操作を disabled にする
 
 ## 7. Join Password Dialog
 
@@ -281,7 +338,8 @@ Validation:
 
 ### 表示タイミング
 
-`join_name` dialog で名前を確定した後、対象ルームが private room の場合に表示します。
+matchmaking lobby で鍵アイコン付き room をクリックした直後に表示します。
+パスワードなし room では表示せず、そのまま参加処理を実行します。
 
 ### レイアウト
 
@@ -298,7 +356,7 @@ Validation:
 
 ### 操作
 
-- `戻る`: `join_name` dialog に戻る
+- `戻る`: dialog を閉じ、matchmaking lobby に戻る
 - `参加`: パスワードを検証し、成功したら room status に応じて `waiting_room` または spectator の `game_play` へ遷移
 
 Validation:
@@ -694,16 +752,16 @@ interface FinalStandingView {
 
 ### Public room 作成
 
-1. lobby で「ルームを作成」を押す
-2. create room でルーム名だけ入力する
+1. lobby で floating の「新しいゲームルームを作成」を押す
+2. `create_room` dialog でルーム名だけ入力する
 3. 「作成」を押す
 4. waiting room へ遷移する
 5. host として「ゲーム開始」ボタンが表示される
 
 ### Private room 作成
 
-1. lobby で「ルームを作成」を押す
-2. create room でルーム名を入力する
+1. lobby で floating の「新しいゲームルームを作成」を押す
+2. `create_room` dialog でルーム名を入力する
 3. パスワード欄に入力する
 4. private room のヒントが表示される
 5. 「作成」を押す
@@ -711,20 +769,19 @@ interface FinalStandingView {
 
 ### Public room 参加
 
-1. lobby で `status === 'lobby'` の public room をクリックする
-2. `join_name` dialog で名前を入力する
-3. 「確定」を押す
+1. lobby のタイトル下にあるプレイヤー名入力が valid であることを確認する
+2. lobby で `status === 'waiting'` のパスワードなし room をクリックする
+3. そのまま参加処理を実行する
 4. player として waiting room へ遷移する
 
 ### Private room 参加
 
-1. lobby で `status === 'lobby'` の鍵アイコン付き room をクリックする
-2. `join_name` dialog で名前を入力する
-3. 「確定」を押す
-4. `join_password` dialog が表示される
-5. パスワードを入力する
-6. 「参加」を押す
-7. 成功したら player として waiting room へ遷移する
+1. lobby のタイトル下にあるプレイヤー名入力が valid であることを確認する
+2. lobby で `status === 'waiting'` の鍵アイコン付き room をクリックする
+3. `join_password` dialog が表示される
+4. パスワードを入力する
+5. 「参加」を押す
+6. 成功したら player として waiting room へ遷移する
 
 ### ゲームプレイ
 
@@ -744,8 +801,8 @@ interface FinalStandingView {
 ### ゲーム中の途中参加
 
 1. lobby で `status === 'playing'` の room をクリックする
-2. `join_name` dialog で名前を入力する
-3. private room の場合は `join_password` dialog でパスワードを入力する
+2. パスワードなし room の場合はそのまま参加処理を実行する
+3. パスワード付き room の場合は `join_password` dialog でパスワードを入力する
 4. spectator として `game_play` へ遷移する
 5. current host から snapshot を受け取り、現在の盤面を表示する
 6. spectator は場に出されたピラミッドと各 player のカード所持数だけをリアルタイムに見られる
@@ -763,10 +820,10 @@ src/ui/
   AppShell.tsx
   ConnectionIndicator.tsx
   MatchmakingLobby.tsx
+  PlayerNameField.tsx
   RoomList.tsx
   RoomListItem.tsx
-  CreateRoomScreen.tsx
-  JoinNameDialog.tsx
+  CreateRoomDialog.tsx
   JoinPasswordDialog.tsx
   WaitingRoomScreen.tsx
   WaitingPlayerStrip.tsx
