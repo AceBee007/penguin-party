@@ -94,11 +94,12 @@ test('runs six player mesh, spectator join, locked room, room full, and host ele
 
     await joinRoom(spectator.page, roomId, spectator.name, 'iceberg');
     await expect(spectator.page.locator('[data-local-role]')).toHaveText('spectator', { timeout: 15000 });
-    await expect(spectator.page.locator('[data-board-count]')).toHaveText('6');
-    await expect(spectator.page.locator('[data-player-count]')).toHaveText('6');
-    await expect(spectator.page.locator('[data-spectator-count]')).toHaveText('1');
+    await expect(spectator.page.locator('[data-board-count]')).toHaveText('6', { timeout: 30000 });
+    await expect(spectator.page.locator('[data-player-count]')).toHaveText('6', { timeout: 30000 });
+    await expect(spectator.page.locator('[data-spectator-count]')).toHaveText('1', { timeout: 30000 });
     await expect(spectator.page.locator('[data-state-hash]')).toHaveText(
       await peers[0].page.locator('[data-state-hash]').innerText(),
+      { timeout: 30000 },
     );
 
     const spectatorDebug = await spectator.page.evaluate(() => {

@@ -122,6 +122,30 @@ test('rejects duplicate online player names before matchmaking', async ({ browse
     await peerB.page.goto('/');
 
     await enterMatchmaking(peerA.page, names[0]);
+    await peerB.page.locator('[data-player-name]').fill(names[0]);
+    await peerB.page.getByRole('button', { name: 'Start' }).click();
+    await expect(peerB.page.locator('[data-game-message]')).toContainText('already online');
+    await expect(peerB.page.locator('[data-room-list]')).toHaveCount(0);
+
+    expect(peerA.consoleErrors).toEqual([]);
+    expect(peerB.consoleErrors).toEqual([]);
+    expect(peerA.failedRequests).toEqual([]);
+    expect(peerB.failedRequests).toEqual([]);
+  } finally {
+    await Promise.allSettled([peerA.context.close(), peerB.context.close()]);
+  }
+});
+
+test('keeps duplicate names rejected after a player creates a room', async ({ browser }, testInfo) => {
+  const names = peerNames('DupRoom', testInfo.project.name, 1);
+  const peerA = await openPeer(browser, { width: 1280, height: 720 });
+  const peerB = await openPeer(browser, { width: 1280, height: 720 });
+
+  try {
+    await peerA.page.goto('/');
+    await peerB.page.goto('/');
+
+    await enterMatchmaking(peerA.page, names[0]);
     await createRoom(peerA.page);
     await expect(peerA.page.locator('[data-room-id]')).toBeVisible();
 

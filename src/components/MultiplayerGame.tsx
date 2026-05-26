@@ -20,6 +20,7 @@ import {
   joinRoom,
   listRooms,
   markRoomPlaying,
+  releasePlayerNameReservation,
   resumeGame,
   validatePlayerName,
 } from '../network/signalingClient';
@@ -43,6 +44,7 @@ const INITIAL_DRAG_STATUS: StageDragStatus = {
 
 const PLAYER_NAME_STORAGE_KEY = 'penguin-party.playerName';
 const ROOM_LIST_POLL_MS = 1600;
+const LOBBY_NAME_RESERVATION_REFRESH_MS = 15 * 1000;
 const AUTO_PLAY_DISCONNECTED_MIN_MS = 5000;
 const AUTO_PLAY_DISCONNECTED_JITTER_MS = 3000;
 
@@ -81,6 +83,7 @@ export function MultiplayerGame() {
   const [networkStatus, setNetworkStatus] = useState('idle');
   const [hostPeerId, setHostPeerId] = useState<string | null>(null);
   const meshRef = useRef<PeerMeshClient | null>(null);
+  const nameReservationTokenRef = useRef<string | null>(null);
   const identityRef = useRef<NetworkIdentity | null>(null);
   const gameRef = useRef<GameSessionState | null>(null);
   const peersRef = useRef<PeerRuntimeView[]>([]);
@@ -132,6 +135,7 @@ export function MultiplayerGame() {
         autoPlayTimeoutRef.current = null;
       }
       autoPlayScheduleRef.current = null;
+      releaseCurrentNameReservation();
       meshRef.current?.close();
       delete window.__PENGUIN_DEBUG__;
     },
@@ -172,6 +176,19 @@ export function MultiplayerGame() {
 
     return () => window.clearInterval(intervalId);
   }, [identity, refreshOpenRooms, scene]);
+
+  useEffect(() => {
+    if (identity || scene !== 'matchmaking_lobby' || !isPlayerNameValid) {
+      return undefined;
+    }
+
+    void refreshNameReservation(trimmedPlayerName);
+    const intervalId = window.setInterval(() => {
+      void refreshNameReservation(trimmedPlayerName);
+    }, LOBBY_NAME_RESERVATION_REFRESH_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [identity, isPlayerNameValid, scene, trimmedPlayerName]);
 
   useEffect(() => {
     if (!identity || identity.peerId !== hostPeerId || !game) {
@@ -331,7 +348,11 @@ export function MultiplayerGame() {
     }
 
     try {
-      await validatePlayerName(trimmedPlayerName);
+      const reservation = await validatePlayerName(
+        trimmedPlayerName,
+        nameReservationTokenRef.current ?? undefined,
+      );
+      nameReservationTokenRef.current = reservation.nameReservationToken;
       setPlayerName(trimmedPlayerName);
       setScene('matchmaking_lobby');
       setMessage('Loading open rooms.');
@@ -354,9 +375,11 @@ export function MultiplayerGame() {
       const nextIdentity = await createRoom({
         roomName,
         hostDisplayName: trimmedPlayerName,
+        nameReservationToken: nameReservationTokenRef.current ?? undefined,
         password: password || undefined,
         maxPlayers: 6,
       });
+      nameReservationTokenRef.current = null;
       setIsCreateDialogOpen(false);
       setCreatePassword('');
       setMessage(`Room ${nextIdentity.room.roomId} created. Waiting for players.`);
@@ -380,8 +403,10 @@ export function MultiplayerGame() {
     try {
       const nextIdentity = await joinRoom(room.roomId, {
         displayName: trimmedPlayerName,
+        nameReservationToken: nameReservationTokenRef.current ?? undefined,
         password: password?.trim() || undefined,
       });
+      nameReservationTokenRef.current = null;
       setMessage(`Joined room ${nextIdentity.room.roomId}.`);
       setPasswordRoom(null);
       setJoinPassword('');
@@ -437,7 +462,10 @@ export function MultiplayerGame() {
     setScene('matchmaking_lobby');
     setMessage('Returned to matchmaking lobby.');
     void refreshOpenRooms(true);
-  }, [refreshOpenRooms]);
+    if (isPlayerNameValid) {
+      void refreshNameReservation(trimmedPlayerName);
+    }
+  }, [isPlayerNameValid, refreshOpenRooms, trimmedPlayerName]);
 
   const handleStartGame = useCallback(() => {
     const currentIdentity = identityRef.current;
@@ -1154,6 +1182,28 @@ export function MultiplayerGame() {
       };
       meshRef.current?.sendPayload(peer.peerId, payload);
     }
+  }
+
+  async function refreshNameReservation(displayName: string): Promise<void> {
+    try {
+      const reservation = await validatePlayerName(displayName, nameReservationTokenRef.current ?? undefined);
+      nameReservationTokenRef.current = reservation.nameReservationToken;
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Player name is unavailable.');
+      releaseCurrentNameReservation();
+      setScene('landing_page');
+    }
+  }
+
+  function releaseCurrentNameReservation(): void {
+    const token = nameReservationTokenRef.current;
+
+    if (!token) {
+      return;
+    }
+
+    nameReservationTokenRef.current = null;
+    void releasePlayerNameReservation(token);
   }
 }
 

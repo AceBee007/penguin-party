@@ -6,11 +6,14 @@ const HOST = process.env.SIGNALING_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.SIGNALING_PORT ?? 8787);
 const MAX_PLAYERS = 6;
 const REJOIN_TTL_MS = 3 * 60 * 60 * 1000;
+const LOBBY_RESERVATION_TTL_MS = 30 * 1000;
 
 /** @type {Map<string, RoomRecord>} */
 const rooms = new Map();
 /** @type {Map<string, WebSocket>} */
 const socketsByPeerId = new Map();
+/** @type {Map<string, LobbyNameReservation>} */
+const lobbyNameReservations = new Map();
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -127,6 +130,7 @@ server.listen(PORT, HOST, () => {
 
 async function routeHttp(request, response) {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? `${HOST}:${PORT}`}`);
+  cleanupLobbyNameReservations();
 
   if (request.method === 'OPTIONS') {
     writeCors(response, 204);
@@ -149,15 +153,38 @@ async function routeHttp(request, response) {
   if (request.method === 'POST' && url.pathname === '/players/name-check') {
     const body = await readJsonBody(request);
     const displayName = sanitizeName(body.displayName, '', 16);
+    const existingReservationToken = String(body.nameReservationToken ?? '').trim();
 
     if (!displayName) {
       writeJson(response, 200, { code: 'invalid_name', message: 'Player name is required.' });
       return;
     }
 
-    if (isDisplayNameOnline(displayName)) {
+    if (isDisplayNameOnline(displayName, existingReservationToken || null)) {
       writeJson(response, 200, { code: 'duplicate_online_name', message: 'Player name is already online.' });
       return;
+    }
+
+    const now = Date.now();
+    const nameReservationToken = existingReservationToken || createId('lobby-name');
+    const expiresAt = now + LOBBY_RESERVATION_TTL_MS;
+
+    lobbyNameReservations.set(nameReservationToken, {
+      displayName,
+      expiresAt,
+      normalizedDisplayName: normalizeDisplayName(displayName),
+    });
+
+    writeJson(response, 200, { ok: true, displayName, expiresAt, nameReservationToken });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/players/name-release') {
+    const body = await readJsonBody(request);
+    const nameReservationToken = String(body.nameReservationToken ?? '').trim();
+
+    if (nameReservationToken) {
+      lobbyNameReservations.delete(nameReservationToken);
     }
 
     writeJson(response, 200, { ok: true });
@@ -168,9 +195,10 @@ async function routeHttp(request, response) {
     const body = await readJsonBody(request);
     const roomName = sanitizeName(body.roomName, 'Penguin Room', 32);
     const hostDisplayName = sanitizeName(body.hostDisplayName, 'Peer A', 16);
+    const nameReservationToken = String(body.nameReservationToken ?? '').trim();
     const password = String(body.password ?? '').trim();
 
-    if (isDisplayNameOnline(hostDisplayName)) {
+    if (isDisplayNameOnline(hostDisplayName, nameReservationToken || null)) {
       writeJson(response, 200, { code: 'duplicate_online_name', message: 'Player name is already online.' });
       return;
     }
@@ -198,6 +226,7 @@ async function routeHttp(request, response) {
     };
 
     rooms.set(roomId, room);
+    consumeLobbyNameReservation(nameReservationToken);
     writeJson(response, 201, {
       room: buildRoomMetadata(room),
       peerId: peer.peerId,
@@ -224,6 +253,7 @@ async function routeHttp(request, response) {
     const body = await readJsonBody(request);
     const password = String(body.password ?? '').trim();
     const displayName = sanitizeName(body.displayName, `Peer ${room.nextPlayerNumber}`, 16);
+    const nameReservationToken = String(body.nameReservationToken ?? '').trim();
 
     if (room.passwordRecord && !password) {
       writeJoinError(response, { code: 'password_required', message: 'Room password is required.' });
@@ -242,7 +272,7 @@ async function routeHttp(request, response) {
       return;
     }
 
-    if (isDisplayNameOnline(displayName)) {
+    if (isDisplayNameOnline(displayName, nameReservationToken || null)) {
       writeJoinError(response, { code: 'duplicate_online_name', message: 'Player name is already online.' });
       return;
     }
@@ -260,6 +290,7 @@ async function routeHttp(request, response) {
     room.nextPlayerNumber += role === 'spectator' ? 0 : 1;
     room.peers.set(peer.peerId, peer);
     room.updatedAt = Date.now();
+    consumeLobbyNameReservation(nameReservationToken);
 
     writeJson(response, 200, {
       room: buildRoomMetadata(room),
@@ -442,14 +473,41 @@ function hasConnectedPeer(room) {
   return [...room.peers.values()].some((peer) => socketsByPeerId.has(peer.peerId));
 }
 
-function isDisplayNameOnline(displayName) {
+function isDisplayNameOnline(displayName, allowedReservationToken = null) {
   const normalized = normalizeDisplayName(displayName);
+
+  const isReservedInLobby = [...lobbyNameReservations.entries()].some(
+    ([token, reservation]) =>
+      token !== allowedReservationToken && reservation.normalizedDisplayName === normalized,
+  );
+
+  if (isReservedInLobby) {
+    return true;
+  }
 
   return [...rooms.values()].some((room) =>
     [...room.peers.values()].some(
       (peer) => peer.connectionStatus !== 'disconnected' && normalizeDisplayName(peer.displayName) === normalized,
     ),
   );
+}
+
+function cleanupLobbyNameReservations() {
+  const now = Date.now();
+
+  for (const [token, reservation] of lobbyNameReservations.entries()) {
+    if (reservation.expiresAt <= now) {
+      lobbyNameReservations.delete(token);
+    }
+  }
+}
+
+function consumeLobbyNameReservation(nameReservationToken) {
+  if (!nameReservationToken) {
+    return;
+  }
+
+  lobbyNameReservations.delete(nameReservationToken);
 }
 
 function normalizeDisplayName(displayName) {
@@ -590,4 +648,11 @@ function verifyPassword(record, password) {
  * @property {{ salt: string; hash: string } | null} passwordRecord
  * @property {Map<string, ReturnType<typeof createPeer>>} peers
  * @property {number} nextPlayerNumber
+ */
+
+/**
+ * @typedef {object} LobbyNameReservation
+ * @property {string} displayName
+ * @property {string} normalizedDisplayName
+ * @property {number} expiresAt
  */

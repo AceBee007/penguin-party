@@ -41,17 +41,25 @@ export interface NetworkIdentity {
 export interface CreateRoomRequest {
   roomName: string;
   hostDisplayName: string;
+  nameReservationToken?: string;
   password?: string;
   maxPlayers: 6;
 }
 
 export interface JoinRoomRequest {
   displayName: string;
+  nameReservationToken?: string;
   password?: string;
 }
 
 export interface ResumeGameRequest {
   rejoinCode: string;
+}
+
+export interface PlayerNameReservation {
+  displayName: string;
+  expiresAt: number;
+  nameReservationToken: string;
 }
 
 export interface CreateRoomResponse extends Omit<NetworkIdentity, 'displayName'> {}

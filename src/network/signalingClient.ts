@@ -4,6 +4,7 @@ import type {
   JoinRoomRequest,
   JoinRoomResponse,
   NetworkIdentity,
+  PlayerNameReservation,
   ResumeGameRequest,
   ResumeGameResponse,
   RoomMetadata,
@@ -54,13 +55,19 @@ export async function createRoom(request: CreateRoomRequest, httpUrl = getSignal
   };
 }
 
-export async function validatePlayerName(displayName: string, httpUrl = getSignalingHttpUrl()): Promise<void> {
+export async function validatePlayerName(
+  displayName: string,
+  nameReservationToken?: string,
+  httpUrl = getSignalingHttpUrl(),
+): Promise<PlayerNameReservation> {
   const response = await fetch(`${httpUrl}/players/name-check`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ displayName }),
+    body: JSON.stringify({ displayName, nameReservationToken }),
   });
-  const payload = (await response.json()) as { ok: true } | { code: string; message: string };
+  const payload = (await response.json()) as
+    | ({ ok: true } & PlayerNameReservation)
+    | { code: string; message: string };
 
   if (!response.ok || 'code' in payload) {
     throw new JoinRoomFailure(
@@ -68,6 +75,19 @@ export async function validatePlayerName(displayName: string, httpUrl = getSigna
       'message' in payload ? payload.message : `Name check failed: ${response.status}`,
     );
   }
+
+  return payload;
+}
+
+export async function releasePlayerNameReservation(
+  nameReservationToken: string,
+  httpUrl = getSignalingHttpUrl(),
+): Promise<void> {
+  await fetch(`${httpUrl}/players/name-release`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ nameReservationToken }),
+  });
 }
 
 export async function resumeGame(request: ResumeGameRequest, httpUrl = getSignalingHttpUrl()): Promise<NetworkIdentity> {
