@@ -98,6 +98,29 @@ test('runs six player mesh, spectator join, locked room, room full, and host ele
     await expect(spectator.page.locator('[data-player-count]')).toHaveText('6', { timeout: 30000 });
     await expect(spectator.page.locator('[data-spectator-count]')).toHaveText('1', { timeout: 30000 });
     await expect.poll(() => getStateHash(spectator.page), { timeout: 30000 }).toBe(await getStateHash(peers[0].page));
+    await expect(spectator.page.locator('[data-spectator-board-toggle]')).toBeVisible();
+
+    const spectatorStageDebug = await waitForStageDebug(spectator.page, 'spectator-stage');
+    expect(spectatorStageDebug.handCards).toHaveLength(0);
+    expect(spectatorStageDebug.handLayerChildren).toBe(0);
+
+    await spectator.page.locator('[data-spectator-board-toggle]').click();
+    await expect(spectator.page.locator('[data-board-fullscreen]')).toBeVisible();
+    await expect(spectator.page.locator('[data-board-fullscreen] canvas')).toBeVisible();
+    const fullscreenDebug = await waitForStageDebug(spectator.page, 'spectator-fullscreen');
+    expect(fullscreenDebug.fitMode).toBe('perfect-pyramid');
+    expect(fullscreenDebug.handCards).toHaveLength(0);
+    expect(fullscreenDebug.handLayerChildren).toBe(0);
+    expect(fullscreenDebug.perfectPyramidWidth).toBeLessThanOrEqual(fullscreenDebug.stageWidth * 0.95 + 1);
+    expect(fullscreenDebug.perfectPyramidHeight).toBeLessThanOrEqual(fullscreenDebug.stageHeight * 0.95 + 1);
+    expect(
+      Math.min(
+        Math.abs(fullscreenDebug.perfectPyramidWidth - fullscreenDebug.stageWidth * 0.95),
+        Math.abs(fullscreenDebug.perfectPyramidHeight - fullscreenDebug.stageHeight * 0.95),
+      ),
+    ).toBeLessThanOrEqual(1);
+    await spectator.page.locator('[data-spectator-board-close]').click();
+    await expect(spectator.page.locator('[data-board-fullscreen]')).toHaveCount(0);
 
     const spectatorDebug = await spectator.page.evaluate(() => {
       const debug = window.__PENGUIN_DEBUG__ as {
@@ -232,6 +255,36 @@ async function getStateHash(page: Page) {
 
     return debug?.game?.stateHash ?? 'none';
   });
+}
+
+async function waitForStageDebug(page: Page, debugId: string) {
+  await expect.poll(() => getStageDebug(page, debugId), { timeout: 15000 }).not.toBeNull();
+  const debug = await getStageDebug(page, debugId);
+
+  if (!debug) {
+    throw new Error(`Missing stage debug for ${debugId}.`);
+  }
+
+  return debug;
+}
+
+async function getStageDebug(page: Page, debugId: string) {
+  return page.evaluate((expectedDebugId) => {
+    const debug = window.__PENGUIN_STAGE_DEBUG__ as
+      | {
+          debugId: string;
+          fitMode: string;
+          handCards: unknown[];
+          handLayerChildren: number;
+          perfectPyramidHeight: number;
+          perfectPyramidWidth: number;
+          stageHeight: number;
+          stageWidth: number;
+        }
+      | undefined;
+
+    return debug?.debugId === expectedDebugId ? debug : null;
+  }, debugId);
 }
 
 async function dragCard(page: Page, targetXOffsetRatio: number) {

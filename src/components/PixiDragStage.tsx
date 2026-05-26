@@ -12,16 +12,23 @@ import type { CardColor, CardId, GameSessionState, LegalMove, MoveTarget, Player
 import {
   HAND_ROW_SPACING_RATIO,
   HAND_Y_OFFSET_RATIO,
+  createBoardOnlyGeometry,
   createBoardGeometry,
+  createPerfectPyramidBoardGeometry,
   getVisualBoardX,
 } from './boardGeometry';
+
+type BoardFitMode = 'dynamic' | 'perfect-pyramid';
 
 interface PixiDragStageProps {
   game: GameSessionState;
   activePlayerId: PlayerId | null;
   handPlayerId?: PlayerId | null;
   canPlay?: boolean;
+  debugId?: string;
+  fitMode?: BoardFitMode;
   legalMoves: LegalMove[];
+  showHand?: boolean;
   onPlayCard: (cardId: CardId, target: MoveTarget) => void;
 }
 
@@ -55,6 +62,15 @@ interface DragState {
   offsetY: number;
 }
 
+type StageDebugCard = {
+  cardId: CardId;
+  centerX: number;
+  centerY: number;
+  width: number;
+  height: number;
+  targets: Array<MoveTarget & { centerX: number; centerY: number }>;
+};
+
 const COLOR_HEX: Record<CardColor, number> = {
   green: 0x38a169,
   yellow: 0xf2c94c,
@@ -79,11 +95,15 @@ export function PixiDragStage({
   activePlayerId,
   handPlayerId,
   canPlay = true,
+  debugId = 'game-stage',
+  fitMode = 'dynamic',
   legalMoves,
+  showHand = true,
   onPlayCard,
 }: PixiDragStageProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const legalMoveKey = useMemo(() => serializeLegalMoves(legalMoves), [legalMoves]);
+  const resolvedHandPlayerId = showHand ? handPlayerId ?? activePlayerId : null;
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -98,9 +118,12 @@ export function PixiDragStage({
     void startPixiGameStage(
       mount,
       game,
-      handPlayerId ?? activePlayerId,
+      resolvedHandPlayerId,
       canPlay,
+      debugId,
+      fitMode,
       legalMoves,
+      showHand,
       onPlayCard,
       () => destroyed,
     ).then((createdApp) => {
@@ -119,7 +142,7 @@ export function PixiDragStage({
         app = null;
       }
     };
-  }, [activePlayerId, canPlay, game, handPlayerId, legalMoveKey, legalMoves, onPlayCard]);
+  }, [canPlay, debugId, fitMode, game, legalMoveKey, legalMoves, onPlayCard, resolvedHandPlayerId, showHand]);
 
   return <div className="pixi-root" data-pixi-root ref={mountRef} />;
 }
@@ -129,7 +152,10 @@ async function startPixiGameStage(
   game: GameSessionState,
   handPlayerId: PlayerId | null,
   canPlay: boolean,
+  debugId: string,
+  fitMode: BoardFitMode,
   legalMoves: LegalMove[],
+  showHand: boolean,
   onPlayCard: (cardId: CardId, target: MoveTarget) => void,
   isDestroyed: () => boolean,
 ) {
@@ -170,7 +196,7 @@ async function startPixiGameStage(
 
     const pointer = dragLayer.toLocal(event.global);
     dragState.container.position.set(pointer.x + dragState.offsetX, pointer.y + dragState.offsetY);
-    const boardLayout = createBoardLayout(app.screen.width, app.screen.height, game, legalMoves, handPlayerId);
+    const boardLayout = createBoardLayout(app.screen.width, app.screen.height, game, legalMoves, handPlayerId, showHand, fitMode);
     const hovered = findNearestTarget(pointer.x, pointer.y, dragState.legalTargets, boardLayout);
 
     drawLegalTargets(targetLayer, boardLayout, dragState.legalTargets, hovered);
@@ -196,10 +222,10 @@ async function startPixiGameStage(
   function renderScene() {
     const width = app.screen.width;
     const height = app.screen.height;
-    const boardLayout = createBoardLayout(width, height, game, legalMoves, handPlayerId);
+    const boardLayout = createBoardLayout(width, height, game, legalMoves, handPlayerId, showHand, fitMode);
 
     background.clear();
-    drawBackground(background, width, height);
+    drawBackground(background, width, height, showHand);
     targetLayer.removeChildren();
     boardLayer.removeChildren();
     handLayer.removeChildren();
@@ -207,10 +233,22 @@ async function startPixiGameStage(
       dragLayer.removeChildren();
     }
     drawBoard(boardLayer, boardLayout, game);
-    drawHand(handLayer, dragLayer, boardLayout, game, handPlayerId, canPlay, legalMoves, (nextDragState) => {
-      dragState = nextDragState;
-      drawLegalTargets(targetLayer, boardLayout, dragState.legalTargets, null);
-    });
+    const handDebugCards = showHand
+      ? drawHand(
+        handLayer,
+        dragLayer,
+        boardLayout,
+        game,
+        handPlayerId,
+        canPlay,
+        legalMoves,
+        (nextDragState) => {
+          dragState = nextDragState;
+          drawLegalTargets(targetLayer, boardLayout, dragState.legalTargets, null);
+        },
+      )
+      : [];
+    writeStageDebug(debugId, boardLayout, handLayer, dragLayer, handDebugCards, fitMode);
   }
 
   function finishDrag() {
@@ -218,7 +256,7 @@ async function startPixiGameStage(
       return;
     }
 
-    const boardLayout = createBoardLayout(app.screen.width, app.screen.height, game, legalMoves, handPlayerId);
+    const boardLayout = createBoardLayout(app.screen.width, app.screen.height, game, legalMoves, handPlayerId, showHand, fitMode);
     const target = findNearestTarget(dragState.container.x, dragState.container.y, dragState.legalTargets, boardLayout);
     const cardId = dragState.cardId;
     const draggedContainer = dragState.container;
@@ -235,15 +273,19 @@ async function startPixiGameStage(
   }
 }
 
-function drawBackground(background: Graphics, width: number, height: number) {
+function drawBackground(background: Graphics, width: number, height: number, showHand: boolean) {
   background.rect(0, 0, width, height).fill(0xe8f4f3);
-  background.rect(0, height * 0.64, width, height * 0.36).fill(0xf4ead6);
+  if (showHand) {
+    background.rect(0, height * 0.64, width, height * 0.36).fill(0xf4ead6);
+  }
   background.roundRect(24, 24, width - 48, height * 0.58, 8).fill({ color: 0xffffff, alpha: 0.34 });
-  background.moveTo(32, height * 0.64).lineTo(width - 32, height * 0.64).stroke({
-    color: 0x17313a,
-    alpha: 0.16,
-    width: 2,
-  });
+  if (showHand) {
+    background.moveTo(32, height * 0.64).lineTo(width - 32, height * 0.64).stroke({
+      color: 0x17313a,
+      alpha: 0.16,
+      width: 2,
+    });
+  }
 }
 
 function drawBoard(layer: Container, layout: BoardLayout, game: GameSessionState) {
@@ -296,36 +338,29 @@ function drawHand(
   canPlay: boolean,
   legalMoves: LegalMove[],
   onStartDrag: (dragState: DragState) => void,
-) {
+): StageDebugCard[] {
   const round = game.currentRound;
 
   if (!round || !handPlayerId || game.status !== 'round_active') {
     drawCenteredLabel(handLayer, 'Round complete', boardLayout.originX, boardLayout.baseY + boardLayout.cardHeight * 2.2);
-    return;
+    return [];
   }
 
   const player = getCurrentRoundPlayer(game, handPlayerId);
 
   if (!player) {
-    return;
+    return [];
   }
 
   if (player.handCardIds.length === 0) {
     drawCenteredLabel(handLayer, 'No cards', boardLayout.originX, boardLayout.baseY + boardLayout.cardHeight * 2.2);
-    return;
+    return [];
   }
 
   const maxCards = player.handCardIds.length;
   const handY = boardLayout.baseY + boardLayout.cardHeight * HAND_Y_OFFSET_RATIO;
   const cardLayouts = getHandCardLayouts(boardLayout, maxCards);
-  const stageDebugCards: Array<{
-    cardId: CardId;
-    centerX: number;
-    centerY: number;
-    width: number;
-    height: number;
-    targets: Array<MoveTarget & { centerX: number; centerY: number }>;
-  }> = [];
+  const stageDebugCards: StageDebugCard[] = [];
 
   player.handCardIds.forEach((cardId, index) => {
     const card = game.cardsById[cardId];
@@ -388,8 +423,24 @@ function drawHand(
     handLayer.addChild(container);
   });
 
+  return stageDebugCards;
+}
+
+function writeStageDebug(
+  debugId: string,
+  boardLayout: BoardLayout,
+  handLayer: Container,
+  dragLayer: Container,
+  handCards: StageDebugCard[],
+  fitMode: BoardFitMode,
+) {
+  const perfectPyramidWidth = boardLayout.cardWidth + 7 * boardLayout.gapX;
+  const perfectPyramidHeight = boardLayout.cardHeight + 7 * boardLayout.rowRise;
+
   window.__PENGUIN_STAGE_DEBUG__ = {
-    handCards: stageDebugCards,
+    debugId,
+    fitMode,
+    handCards,
     handLayerChildren: handLayer.children.length,
     dragLayerChildren: dragLayer.children.length,
     boardTopY: boardLayout.boardTopY,
@@ -398,6 +449,8 @@ function drawHand(
     stageWidth: boardLayout.stageWidth,
     stageHeight: boardLayout.stageHeight,
     scale: boardLayout.scale,
+    perfectPyramidWidth,
+    perfectPyramidHeight,
   };
 }
 
@@ -500,6 +553,8 @@ function createBoardLayout(
   game: GameSessionState,
   legalMoves: LegalMove[],
   handPlayerId: PlayerId | null,
+  showHand: boolean,
+  fitMode: BoardFitMode,
 ): BoardLayout {
   const board = game.currentRound?.board;
   const xValues = [
@@ -516,9 +571,18 @@ function createBoardLayout(
   const maxX = Math.max(...xValues);
   const maxLevel = Math.max(...levelValues);
   const handCardCount = handPlayerId ? getCurrentRoundPlayer(game, handPlayerId)?.handCardIds.length ?? 0 : 0;
+  let geometry: ReturnType<typeof createBoardGeometry>;
+
+  if (fitMode === 'perfect-pyramid') {
+    geometry = createPerfectPyramidBoardGeometry({ width, height });
+  } else if (showHand) {
+    geometry = createBoardGeometry({ width, height, minVisualX: minX, maxVisualX: maxX, maxLevel, handCardCount });
+  } else {
+    geometry = createBoardOnlyGeometry({ width, height, minVisualX: minX, maxVisualX: maxX, maxLevel });
+  }
 
   return {
-    ...createBoardGeometry({ width, height, minVisualX: minX, maxVisualX: maxX, maxLevel, handCardCount }),
+    ...geometry,
     stageWidth: width,
     stageHeight: height,
   };

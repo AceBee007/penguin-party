@@ -25,6 +25,8 @@ export interface BoardGeometry {
   scale: number;
 }
 
+const PERFECT_PYRAMID_BASE_CARDS = 8;
+const PERFECT_PYRAMID_MAX_LEVEL = 7;
 const MAX_CARD_WIDTH = 78;
 const BASE_MIN_CARD_WIDTH = 42;
 const ABSOLUTE_MIN_CARD_WIDTH = 18;
@@ -56,7 +58,7 @@ export function createBoardGeometry(input: BoardGeometryInput): BoardGeometry {
   cardWidth = Math.max(ABSOLUTE_MIN_CARD_WIDTH, Math.min(baseCardWidth, verticalCardWidth));
 
   const cardHeight = cardWidth * CARD_ASPECT_RATIO;
-  const gap = Math.max(4, cardWidth * 0.13);
+  const gap = getCardGap(cardWidth);
   const columns = Math.max(1, input.maxVisualX - input.minVisualX + 1);
   const gapX = Math.min(cardWidth + gap, availableWidth / columns);
   const originX = input.width / 2 - ((input.minVisualX + input.maxVisualX) / 2) * gapX;
@@ -81,11 +83,85 @@ export function createBoardGeometry(input: BoardGeometryInput): BoardGeometry {
   };
 }
 
+export function createBoardOnlyGeometry(input: BoardGeometryInput): BoardGeometry {
+  const availableWidth = Math.max(220, input.width - 60);
+  const baseCardWidth = Math.min(MAX_CARD_WIDTH, Math.max(BASE_MIN_CARD_WIDTH, availableWidth / 9.7));
+  const maxLevel = Math.max(0, input.maxLevel);
+  const verticalCardWidth = getBoardOnlyVerticalFitCardWidth(input.height, maxLevel);
+  const cardWidth = Math.max(ABSOLUTE_MIN_CARD_WIDTH, Math.min(baseCardWidth, verticalCardWidth));
+  const cardHeight = cardWidth * CARD_ASPECT_RATIO;
+  const gap = getCardGap(cardWidth);
+  const columns = Math.max(1, input.maxVisualX - input.minVisualX + 1);
+  const gapX = Math.min(cardWidth + gap, availableWidth / columns);
+  const rowRise = cardHeight * ROW_RISE_RATIO;
+  const boardHeight = cardHeight + maxLevel * rowRise;
+  const boardTopY = (input.height - boardHeight) / 2;
+  const originX = input.width / 2 - ((input.minVisualX + input.maxVisualX) / 2) * gapX;
+  const baseY = boardTopY + cardHeight / 2 + maxLevel * rowRise;
+
+  return {
+    cardWidth,
+    cardHeight,
+    gapX,
+    rowRise,
+    originX,
+    baseY,
+    boardTopY,
+    handBottomY: boardTopY + boardHeight,
+    handRows: 0,
+    scale: cardWidth / baseCardWidth,
+  };
+}
+
+export function createPerfectPyramidBoardGeometry(input: Pick<BoardGeometryInput, 'width' | 'height'>): BoardGeometry {
+  const cardWidth = getPerfectPyramidCardWidth(input.width, input.height);
+  const cardHeight = cardWidth * CARD_ASPECT_RATIO;
+  const gapX = cardWidth + getCardGap(cardWidth);
+  const rowRise = cardHeight * ROW_RISE_RATIO;
+  const boardHeight = cardHeight + PERFECT_PYRAMID_MAX_LEVEL * rowRise;
+  const boardTopY = (input.height - boardHeight) / 2;
+  const originX = input.width / 2 - ((PERFECT_PYRAMID_BASE_CARDS - 1) / 2) * gapX;
+  const baseY = boardTopY + cardHeight / 2 + PERFECT_PYRAMID_MAX_LEVEL * rowRise;
+
+  return {
+    cardWidth,
+    cardHeight,
+    gapX,
+    rowRise,
+    originX,
+    baseY,
+    boardTopY,
+    handBottomY: boardTopY + boardHeight,
+    handRows: 0,
+    scale: cardWidth / MAX_CARD_WIDTH,
+  };
+}
+
 function getVerticalFitCardWidth(height: number, maxLevel: number, handRows: number): number {
   const availableHeight = Math.max(80, height - EDGE_PADDING * 2);
   const heightUnits = CARD_ASPECT_RATIO * (maxLevel * ROW_RISE_RATIO + 0.5 + getHandBottomOffsetRatio(handRows));
 
   return availableHeight / heightUnits;
+}
+
+function getBoardOnlyVerticalFitCardWidth(height: number, maxLevel: number): number {
+  const availableHeight = Math.max(80, height - EDGE_PADDING * 2);
+  const heightUnits = CARD_ASPECT_RATIO * (1 + maxLevel * ROW_RISE_RATIO);
+
+  return availableHeight / heightUnits;
+}
+
+function getPerfectPyramidCardWidth(width: number, height: number): number {
+  const targetWidth = width * 0.95;
+  const targetHeight = height * 0.95;
+  const heightUnits = CARD_ASPECT_RATIO * (1 + PERFECT_PYRAMID_MAX_LEVEL * ROW_RISE_RATIO);
+  const widthUnits = PERFECT_PYRAMID_BASE_CARDS + (PERFECT_PYRAMID_BASE_CARDS - 1) * 0.13;
+  const heightFitWidth = targetHeight / heightUnits;
+  const proportionalWidthFit = targetWidth / widthUnits;
+  const gapFloorWidthFit = (targetWidth - (PERFECT_PYRAMID_BASE_CARDS - 1) * 4) / PERFECT_PYRAMID_BASE_CARDS;
+  const widthFitWidth = proportionalWidthFit * 0.13 >= 4 ? proportionalWidthFit : gapFloorWidthFit;
+
+  return Math.max(ABSOLUTE_MIN_CARD_WIDTH, Math.min(heightFitWidth, widthFitWidth));
 }
 
 function getHandBottomOffsetRatio(handRows: number): number {
@@ -112,6 +188,10 @@ function getHandRowCount(stageWidth: number, cardWidth: number, cardCount: numbe
   }
 
   return Math.ceil(cardCount / compactColumns);
+}
+
+function getCardGap(cardWidth: number): number {
+  return Math.max(4, cardWidth * 0.13);
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -618,11 +618,31 @@ interface CompactScoreboardPlayerView {
 - spectator は各プレイヤーが実際に持っているカードの色、カードID、カード内容を見られない
 - spectator の local state には、各プレイヤーの手札、山札順、配札順、非公開乱数 seed を持たせない
 - spectator にはローカル手札を表示しない
+- spectator の play-area には `No cards` などの手札なし表示や手札用の黄色い領域を表示しない
 - spectator には「観戦中」badge を表示する
 - spectator は `play_card` などの gameplay action を実行できない
 - spectator は player の席順、得点、残り手札数、場に出されたカード、ラウンド状況を閲覧できる
 - spectator は host election の候補にならない
 - 次のゲームを同じ room で始める場合、host が許可すれば spectator を player として参加させてもよい
+
+spectator board 最大化:
+
+- spectator の `game_play` では、play-area の stage の下に最大化を意味する icon button を表示する
+- 最大化 icon button は text label を表示せず、`aria-label` で操作名を提供する
+- 最大化 icon button をクリックすると、board 表示を viewport 幅 100% / 高さ 100% の overlay に切り替える
+- overlay では手札領域、手札なし表示、player の入力 hint を表示しない
+- overlay には元の表示へ戻るための icon button を表示する
+- overlay 表示中に `Escape` を押した場合も元の表示へ戻る
+
+最大化 overlay の board 比率:
+
+- board は常に「完璧なピラミッド」を基準に固定比率で表示する
+- 完璧なピラミッドは、1段目が8枚、最上段が1枚の8段構成とする
+- card aspect ratio、横 gap、段間隔は通常 board と同じ比率を使う
+- scale は、完璧なピラミッドの横幅が viewport width の 95% 以下、かつ縦幅が viewport height の 95% 以下になるように計算する
+- width 条件と height 条件のうち、より厳しい条件に合わせて scale を決定する
+- 余った方向には上下または左右の余白があってよい
+- 例: viewport height の95%が950px、viewport width の95%が200pxの場合、width 条件のほうが厳しいため、ピラミッド幅を200pxに合わせる
 
 観戦者に表示してよい情報:
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createBoardGeometry, getVisualBoardX } from './boardGeometry';
+import { createBoardGeometry, createPerfectPyramidBoardGeometry, getVisualBoardX } from './boardGeometry';
 
 describe('board geometry', () => {
   it('centers upper pyramid cards over their two supporting cards', () => {
@@ -42,5 +42,21 @@ describe('board geometry', () => {
 
     expect(narrow.handRows).toBeGreaterThan(1);
     expect(narrow.handBottomY).toBeLessThanOrEqual(360 - 18 + 0.001);
+  });
+
+  it('fits spectator fullscreen boards to the stricter viewport dimension', () => {
+    const widthConstrained = createPerfectPyramidBoardGeometry({ width: 200, height: 1000 });
+    const widthConstrainedPyramidWidth = widthConstrained.cardWidth + 7 * widthConstrained.gapX;
+    const widthConstrainedPyramidHeight = widthConstrained.cardHeight + 7 * widthConstrained.rowRise;
+
+    expect(widthConstrainedPyramidWidth).toBeCloseTo(200 * 0.95, 4);
+    expect(widthConstrainedPyramidHeight).toBeLessThan(1000 * 0.95);
+
+    const heightConstrained = createPerfectPyramidBoardGeometry({ width: 1200, height: 300 });
+    const heightConstrainedPyramidWidth = heightConstrained.cardWidth + 7 * heightConstrained.gapX;
+    const heightConstrainedPyramidHeight = heightConstrained.cardHeight + 7 * heightConstrained.rowRise;
+
+    expect(heightConstrainedPyramidHeight).toBeCloseTo(300 * 0.95, 4);
+    expect(heightConstrainedPyramidWidth).toBeLessThan(1200 * 0.95);
   });
 });

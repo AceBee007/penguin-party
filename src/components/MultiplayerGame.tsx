@@ -77,6 +77,7 @@ export function MultiplayerGame() {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isLeaveConfirmOpen, setIsLeaveConfirmOpen] = useState(false);
   const [isScoreboardExpanded, setIsScoreboardExpanded] = useState(false);
+  const [isBoardMaximized, setIsBoardMaximized] = useState(false);
   const [passwordRoom, setPasswordRoom] = useState<RoomListItemView | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [joiningRoomId, setJoiningRoomId] = useState<string | null>(null);
@@ -291,6 +292,35 @@ export function MultiplayerGame() {
 
     return 'waiting_room';
   }, [game, identity, scene]);
+  const canMaximizeSpectatorBoard = currentScene === 'game_play' && isSpectator && Boolean(game);
+
+  useEffect(() => {
+    if (!canMaximizeSpectatorBoard) {
+      setIsBoardMaximized(false);
+    }
+  }, [canMaximizeSpectatorBoard]);
+
+  useEffect(() => {
+    if (!isBoardMaximized) {
+      return undefined;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsBoardMaximized(false);
+      }
+    };
+
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isBoardMaximized]);
+
   const scoreboardPlayers = useMemo<ScoreboardPlayerView[]>(() => {
     if (game) {
       return game.players.map((player) => {
@@ -489,6 +519,7 @@ export function MultiplayerGame() {
     lastRoomLeaveAtRef.current = Date.now();
     setIsLeaveConfirmOpen(false);
     setIsScoreboardExpanded(false);
+    setIsBoardMaximized(false);
     meshRef.current?.close();
     meshRef.current = null;
     identityRef.current = null;
@@ -888,10 +919,12 @@ export function MultiplayerGame() {
                 <PixiDragStage
                   activePlayerId={activePlayer?.playerId ?? null}
                   canPlay={isLocalTurn}
+                  debugId={isSpectator ? 'spectator-stage' : 'game-stage'}
                   game={game}
                   handPlayerId={localPlayerId}
                   legalMoves={legalMoves}
                   onPlayCard={handlePlayCard}
+                  showHand={!isSpectator}
                 />
               ) : (
                 <div className="waiting-canvas" data-waiting-for-snapshot>
@@ -899,6 +932,20 @@ export function MultiplayerGame() {
                 </div>
               )}
             </div>
+
+            {canMaximizeSpectatorBoard ? (
+              <div className="spectator-board-controls">
+                <button
+                  className="board-icon-button board-icon-button--maximize"
+                  aria-label="Maximize board"
+                  data-spectator-board-toggle
+                  type="button"
+                  onClick={() => setIsBoardMaximized(true)}
+                >
+                  <span aria-hidden="true" />
+                </button>
+              </div>
+            ) : null}
 
             <div className="action-bar">
               <p data-game-message>{message}</p>
@@ -914,6 +961,31 @@ export function MultiplayerGame() {
               </div>
             </div>
           </section>
+
+          {isBoardMaximized && game && isSpectator ? (
+            <div className="board-fullscreen" data-board-fullscreen role="dialog" aria-label="Maximized board">
+              <PixiDragStage
+                activePlayerId={activePlayer?.playerId ?? null}
+                canPlay={false}
+                debugId="spectator-fullscreen"
+                fitMode="perfect-pyramid"
+                game={game}
+                handPlayerId={null}
+                legalMoves={[]}
+                onPlayCard={handlePlayCard}
+                showHand={false}
+              />
+              <button
+                className="board-icon-button board-icon-button--minimize board-fullscreen__close"
+                aria-label="Restore board"
+                data-spectator-board-close
+                type="button"
+                onClick={() => setIsBoardMaximized(false)}
+              >
+                <span aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
 
           <aside className="round-panel" aria-label="P2P details">
             <div className="metric-grid">
