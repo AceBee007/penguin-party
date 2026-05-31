@@ -1,4 +1,4 @@
-import { SignalingClient } from './signalingClient';
+import { getSignalingWsUrl, SignalingClient } from './signalingClient';
 import type {
   NetworkIdentity,
   P2PEnvelope,
@@ -30,6 +30,7 @@ interface PeerConnectionRecord {
 interface PeerMeshOptions {
   identity: NetworkIdentity;
   hostPeerId: string;
+  signalingHttpUrl: string;
   onPeersChanged: (peers: PeerRuntimeView[]) => void;
   onPayload: (envelope: P2PEnvelope) => void;
   onChannelOpen: (peer: PeerSummary) => void;
@@ -57,7 +58,7 @@ export class PeerMeshClient {
   }
 
   connect(): void {
-    this.signaling.connect();
+    this.signaling.connect(getSignalingWsUrl(this.options.signalingHttpUrl));
     this.retryIntervalId = window.setInterval(() => {
       void this.retryStaleOffererConnections();
     }, 2500);

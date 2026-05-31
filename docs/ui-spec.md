@@ -89,7 +89,7 @@ interface ConnectionIndicatorView {
 ### 目的
 
 起動直後に表示する最初の画面です。
-ゲームタイトル、プレイヤー名設定、「Start」ボタンだけを表示し、room 一覧は表示しません。
+ゲームタイトル、プレイヤー名設定、re-join code、signaling server 接続欄、「Start」ボタンを表示し、room 一覧は表示しません。
 プレイ中 game へ復帰するため、プレイヤー名入力の下に re-join code 入力欄も表示します。
 
 ### レイアウト
@@ -100,6 +100,8 @@ Penguin Party
 [re-join code_____________]
 
 [Start]
+
+[http://127.0.0.1:15201____] [接続]
 ```
 
 ### プレイヤー名入力
@@ -130,14 +132,38 @@ Validation:
 - 名前は最大16文字
 - 同時に online の player と同じ名前は使えない
 - invalid の場合、`Start` ボタンを disabled にする
+- signaling server へ接続成功していない場合、`Start` ボタンを disabled にする
 - 名前重複が検出された場合、`Start` は失敗し、Landing page にエラーを表示して `matchmaking_lobby` へ遷移しない
 
 ### 操作
 
-- `Start`: プレイヤー名が valid なら `matchmaking_lobby` へ遷移する
+- `接続`: signaling server 欄の URL へ接続確認を行う
+- `Start`: プレイヤー名が valid かつ signaling server への接続確認が成功済みなら `matchmaking_lobby` へ遷移する
 - re-join code が入力されている場合、`Start` は名前ではなく re-join code による resume を優先する
 - re-join code resume が成功した場合、保存済み player name、playerId、手札、手番状態で `game_play` へ遷移する
 - re-join code resume が失敗した場合、Landing page にエラーを表示し、入力中の player name は変更しない
+
+### Signaling server 入力
+
+player name、re-join code、Start の下に表示します。
+
+```ts
+interface SignalingServerInputView {
+  value: string;
+  status: 'idle' | 'checking' | 'connected' | 'error';
+  error: string | null;
+}
+```
+
+表示ルール:
+
+- 初期値は `docs/network-spec.md` の signaling server URL 解決ルールに従う
+- URL の query に `signaling-server` がある場合は、その値を初期値として表示する
+- `接続` を押すと、入力された signaling server の `/rooms` へ接続確認を行う
+- 接続確認が成功した場合だけ、`Start` を enabled にする
+- 接続確認に失敗した場合、`Start` は disabled のままにし、Landing page にエラーを表示する
+- ユーザーが接続成功後に signaling server 欄を編集した場合、接続状態を未接続に戻し、再度 `接続` が成功するまで `Start` を disabled にする
+- 接続成功した signaling server URL は、現在の page URL の `signaling-server` query に反映する
 
 ### Re-join code 入力
 

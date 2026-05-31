@@ -643,6 +643,30 @@ button {
   background: #fffaf0;
 }
 
+.signaling-server-field {
+  grid-column: 1 / span 2;
+}
+
+.landing-form__connect-button {
+  min-height: 40px;
+}
+
+.landing-form__connection-status {
+  grid-column: 1 / -1;
+  margin: -2px 0 0;
+  color: #5e6d72;
+  font-size: 12px;
+  font-weight: 800;
+
+  &[data-status="connected"] {
+    color: #1f7a4f;
+  }
+
+  &[data-status="error"] {
+    color: #9f2b2b;
+  }
+}
+
 .player-name-field,
 .dialog-card label {
   display: grid;
@@ -1074,6 +1098,10 @@ button {
 
   .landing-form {
     grid-template-columns: 1fr;
+  }
+
+  .signaling-server-field {
+    grid-column: auto;
   }
 
   .matchmaking-lobby {

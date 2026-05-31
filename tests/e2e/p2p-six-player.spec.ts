@@ -219,8 +219,17 @@ function readPort(candidates: Array<string | undefined>, fallback: number): numb
 
 async function enterMatchmaking(page: Page, name: string) {
   await page.locator('[data-player-name]').fill(name);
+  await connectSignalingServer(page);
   await page.getByRole('button', { name: 'Start' }).click();
   await expect(page.locator('[data-room-list]')).toBeVisible({ timeout: 15000 });
+}
+
+async function connectSignalingServer(page: Page) {
+  await expect(page.getByRole('button', { name: 'Start' })).toBeDisabled();
+  await page.getByRole('button', { name: '接続' }).click();
+  await expect(page.locator('[data-signaling-status]')).toContainText('Connected', { timeout: 15000 });
+  await expect(page).toHaveURL(/signaling-server=/);
+  await expect(page.getByRole('button', { name: 'Start' })).toBeEnabled();
 }
 
 async function joinRoom(page: Page, roomId: string, name: string, password: string) {

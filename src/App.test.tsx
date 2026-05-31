@@ -42,7 +42,17 @@ describe('App', () => {
     }
     expect(screen.getByText('Landing page')).toBeInTheDocument();
     expect((screen.getByLabelText('Player name') as HTMLInputElement).value).toMatch(/^Player_[0-9a-f]{6}$/);
-    expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled();
+    expect(screen.getByLabelText('Signaling server')).toHaveValue(`http://${window.location.hostname}:15201`);
+    expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '接続' })).toBeEnabled();
+  });
+
+  it('uses the signaling server query as the landing default', () => {
+    window.history.replaceState({}, '', '/?signaling-server=http%3A%2F%2F10.0.0.8%3A15201');
+
+    render(<App />);
+
+    expect(screen.getByLabelText('Signaling server')).toHaveValue('http://10.0.0.8:15201');
   });
 
   it('renders the local verification game shell for local-test mode', () => {

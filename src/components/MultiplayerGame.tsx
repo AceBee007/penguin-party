@@ -17,14 +17,18 @@ import type { CardId, GameSessionState, MoveTarget, PlayerId, RoundPlayerState }
 import { electNextHostPeerId } from '../network/hostElection';
 import { PeerMeshClient } from '../network/peerMesh';
 import {
+  checkSignalingServer,
   createRoom,
+  getSignalingHttpUrl,
   JoinRoomFailure,
   joinRoom,
   listRooms,
   markRoomPlaying,
   markRoomWaitingForStart,
+  normalizeSignalingHttpUrl,
   releasePlayerNameReservation,
   resumeGame,
+  setSignalingServerQuery,
   validatePlayerName,
 } from '../network/signalingClient';
 import type {
@@ -56,6 +60,8 @@ type MultiplayerScene =
   | 'round_result'
   | 'game_result';
 
+type SignalingConnectionStatus = 'idle' | 'checking' | 'connected' | 'error';
+
 interface RoomListItemView extends RoomMetadata {
   canJoin: boolean;
   joinRole: 'player' | 'spectator' | null;
@@ -77,6 +83,10 @@ export function MultiplayerGame() {
   const [peers, setPeers] = useState<PeerRuntimeView[]>([]);
   const [playerName, setPlayerName] = useState(() => readStoredPlayerName());
   const [rejoinCode, setRejoinCode] = useState('');
+  const [signalingServerUrl, setSignalingServerUrl] = useState(() => getSignalingHttpUrl());
+  const [connectedSignalingServerUrl, setConnectedSignalingServerUrl] = useState<string | null>(null);
+  const [signalingConnectionStatus, setSignalingConnectionStatus] =
+    useState<SignalingConnectionStatus>('idle');
   const [rooms, setRooms] = useState<RoomMetadata[]>([]);
   const [isRoomListLoading, setIsRoomListLoading] = useState(false);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -103,6 +113,7 @@ export function MultiplayerGame() {
   const readyByPlayerIdRef = useRef<Record<PlayerId, boolean>>({});
   const readyGateRef = useRef<ReadyGateKind | null>(null);
   const hostPeerIdRef = useRef<string | null>(null);
+  const signalingConnectionRequestRef = useRef(0);
   const eventSeqRef = useRef(0);
   const autoPlayTimeoutRef = useRef<number | null>(null);
   const autoPlayScheduleRef = useRef<{ playerId: PlayerId; revision: number } | null>(null);
@@ -110,7 +121,14 @@ export function MultiplayerGame() {
   const trimmedPlayerName = playerName.trim();
   const trimmedRejoinCode = rejoinCode.trim();
   const isPlayerNameValid = trimmedPlayerName.length > 0 && trimmedPlayerName.length <= 16;
-  const canStartLanding = isPlayerNameValid || trimmedRejoinCode.length > 0;
+  const hasLandingStartInput = isPlayerNameValid || trimmedRejoinCode.length > 0;
+  const canStartLanding = hasLandingStartInput && signalingConnectionStatus === 'connected';
+  const canConnectSignalingServer = signalingServerUrl.trim().length > 0 && signalingConnectionStatus !== 'checking';
+  const signalingConnectionLabel = getSignalingConnectionLabel(
+    signalingConnectionStatus,
+    connectedSignalingServerUrl,
+  );
+  const landingMessage = getLandingMessage(hasLandingStartInput, signalingConnectionStatus, message);
   const roomItems = useMemo(() => rooms.map(toRoomListItem), [rooms]);
 
   useEffect(() => {
@@ -164,12 +182,18 @@ export function MultiplayerGame() {
   );
 
   const refreshOpenRooms = useCallback(async (showLoading = false) => {
+    if (!connectedSignalingServerUrl) {
+      setRooms([]);
+      setMessage('Connect to a signaling server before loading rooms.');
+      return;
+    }
+
     if (showLoading) {
       setIsRoomListLoading(true);
     }
 
     try {
-      const nextRooms = await listRooms();
+      const nextRooms = await listRooms(connectedSignalingServerUrl);
       setRooms(nextRooms);
 
       if (showLoading) {
@@ -183,7 +207,44 @@ export function MultiplayerGame() {
         setIsRoomListLoading(false);
       }
     }
+  }, [connectedSignalingServerUrl]);
+
+  const handleSignalingServerUrlChange = useCallback((value: string) => {
+    signalingConnectionRequestRef.current += 1;
+    setSignalingServerUrl(value);
+    setConnectedSignalingServerUrl(null);
+    setSignalingConnectionStatus('idle');
   }, []);
+
+  const handleConnectSignalingServer = useCallback(async () => {
+    const requestId = signalingConnectionRequestRef.current + 1;
+    signalingConnectionRequestRef.current = requestId;
+    setSignalingConnectionStatus('checking');
+    setConnectedSignalingServerUrl(null);
+    setMessage('Connecting to signaling server.');
+
+    try {
+      const normalizedUrl = normalizeSignalingHttpUrl(signalingServerUrl);
+      await checkSignalingServer(normalizedUrl);
+
+      if (signalingConnectionRequestRef.current !== requestId) {
+        return;
+      }
+
+      setSignalingServerUrl(normalizedUrl);
+      setConnectedSignalingServerUrl(normalizedUrl);
+      setSignalingConnectionStatus('connected');
+      setSignalingServerQuery(normalizedUrl);
+      setMessage('Connected to signaling server.');
+    } catch (error) {
+      if (signalingConnectionRequestRef.current !== requestId) {
+        return;
+      }
+
+      setSignalingConnectionStatus('error');
+      setMessage(error instanceof Error ? error.message : 'Signaling server connection failed.');
+    }
+  }, [signalingServerUrl]);
 
   useEffect(() => {
     if (identity || scene !== 'matchmaking_lobby') {
@@ -443,11 +504,19 @@ export function MultiplayerGame() {
   }, [currentScene]);
 
   const startMesh = useCallback((nextIdentity: NetworkIdentity) => {
+    const signalingHttpUrl = connectedSignalingServerUrl;
+
+    if (!signalingHttpUrl) {
+      setMessage('Connect to a signaling server before joining a room.');
+      return;
+    }
+
     meshRef.current?.close();
     const nextHostPeerId = nextIdentity.room.hostPeerId;
     const mesh = new PeerMeshClient({
       identity: nextIdentity,
       hostPeerId: nextHostPeerId,
+      signalingHttpUrl,
       onPeersChanged: (nextPeers) => {
         setPeers(nextPeers);
       },
@@ -490,12 +559,17 @@ export function MultiplayerGame() {
       })),
     ]);
     mesh.connect();
-  }, []);
+  }, [connectedSignalingServerUrl]);
 
   const handleEnterMatchmaking = useCallback(async () => {
+    if (!connectedSignalingServerUrl) {
+      setMessage('Connect to a signaling server before starting.');
+      return;
+    }
+
     if (trimmedRejoinCode) {
       try {
-        const nextIdentity = await resumeGame({ rejoinCode: trimmedRejoinCode });
+        const nextIdentity = await resumeGame({ rejoinCode: trimmedRejoinCode }, connectedSignalingServerUrl);
         setPlayerName(nextIdentity.displayName);
         setRejoinCode('');
         setMessage(`Resumed room ${nextIdentity.room.roomId}.`);
@@ -514,6 +588,7 @@ export function MultiplayerGame() {
       const reservation = await validatePlayerName(
         trimmedPlayerName,
         nameReservationTokenRef.current ?? undefined,
+        connectedSignalingServerUrl,
       );
       nameReservationTokenRef.current = reservation.nameReservationToken;
       setPlayerName(trimmedPlayerName);
@@ -523,11 +598,23 @@ export function MultiplayerGame() {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Player name is unavailable.');
     }
-  }, [isPlayerNameValid, refreshOpenRooms, startMesh, trimmedPlayerName, trimmedRejoinCode]);
+  }, [
+    connectedSignalingServerUrl,
+    isPlayerNameValid,
+    refreshOpenRooms,
+    startMesh,
+    trimmedPlayerName,
+    trimmedRejoinCode,
+  ]);
 
   const handleCreateRoom = useCallback(async () => {
     if (!isPlayerNameValid) {
       setMessage('Enter a player name before creating a room.');
+      return;
+    }
+
+    if (!connectedSignalingServerUrl) {
+      setMessage('Connect to a signaling server before creating a room.');
       return;
     }
 
@@ -541,7 +628,7 @@ export function MultiplayerGame() {
         nameReservationToken: nameReservationTokenRef.current ?? undefined,
         password: password || undefined,
         maxPlayers: 6,
-      });
+      }, connectedSignalingServerUrl);
       nameReservationTokenRef.current = null;
       setIsCreateDialogOpen(false);
       setCreatePassword('');
@@ -552,11 +639,16 @@ export function MultiplayerGame() {
     } finally {
       setIsCreatingRoom(false);
     }
-  }, [createPassword, isPlayerNameValid, roomName, startMesh, trimmedPlayerName]);
+  }, [connectedSignalingServerUrl, createPassword, isPlayerNameValid, roomName, startMesh, trimmedPlayerName]);
 
   const handleJoinRoom = useCallback(async (room: RoomListItemView, password?: string) => {
     if (!isPlayerNameValid) {
       setMessage('Enter a player name before joining a room.');
+      return;
+    }
+
+    if (!connectedSignalingServerUrl) {
+      setMessage('Connect to a signaling server before joining a room.');
       return;
     }
 
@@ -568,7 +660,7 @@ export function MultiplayerGame() {
         displayName: trimmedPlayerName,
         nameReservationToken: nameReservationTokenRef.current ?? undefined,
         password: password?.trim() || undefined,
-      });
+      }, connectedSignalingServerUrl);
       nameReservationTokenRef.current = null;
       setMessage(`Joined room ${nextIdentity.room.roomId}.`);
       setPasswordRoom(null);
@@ -591,7 +683,14 @@ export function MultiplayerGame() {
     } finally {
       setJoiningRoomId(null);
     }
-  }, [isPlayerNameValid, passwordRoom?.roomId, refreshOpenRooms, startMesh, trimmedPlayerName]);
+  }, [
+    connectedSignalingServerUrl,
+    isPlayerNameValid,
+    passwordRoom?.roomId,
+    refreshOpenRooms,
+    startMesh,
+    trimmedPlayerName,
+  ]);
 
   const handleRoomClick = useCallback((room: RoomListItemView) => {
     if (!room.canJoin) {
@@ -729,7 +828,7 @@ export function MultiplayerGame() {
                 maxLength={16}
                 onChange={(event) => setPlayerName(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
+                  if (event.key === 'Enter' && canStartLanding) {
                     void handleEnterMatchmaking();
                   }
                 }}
@@ -743,7 +842,7 @@ export function MultiplayerGame() {
                 maxLength={32}
                 onChange={(event) => setRejoinCode(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
+                  if (event.key === 'Enter' && canStartLanding) {
                     void handleEnterMatchmaking();
                   }
                 }}
@@ -752,9 +851,33 @@ export function MultiplayerGame() {
             <button type="button" disabled={!canStartLanding} onClick={() => void handleEnterMatchmaking()}>
               Start
             </button>
+            <label className="player-name-field signaling-server-field">
+              Signaling server
+              <input
+                data-signaling-server-input
+                value={signalingServerUrl}
+                onChange={(event) => handleSignalingServerUrlChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && canConnectSignalingServer) {
+                    void handleConnectSignalingServer();
+                  }
+                }}
+              />
+            </label>
+            <button
+              className="landing-form__connect-button"
+              type="button"
+              disabled={!canConnectSignalingServer}
+              onClick={() => void handleConnectSignalingServer()}
+            >
+              接続
+            </button>
+            <p className="landing-form__connection-status" data-signaling-status data-status={signalingConnectionStatus}>
+              {signalingConnectionLabel}
+            </p>
           </div>
           <p className="lobby-message" data-game-message>
-            {canStartLanding ? message : 'Player name or re-join code is required.'}
+            {landingMessage}
           </p>
         </section>
       ) : null}
@@ -1361,7 +1484,7 @@ export function MultiplayerGame() {
     eventSeqRef.current = 0;
     gameRef.current = snapshot;
     setGame(snapshot);
-    void markRoomPlaying(currentIdentity.room.roomId);
+    void markRoomPlaying(currentIdentity.room.roomId, connectedSignalingServerUrl ?? undefined);
     const playingIdentity = {
       ...currentIdentity,
       room: { ...currentIdentity.room, status: 'playing' as const },
@@ -1400,7 +1523,7 @@ export function MultiplayerGame() {
 
     clearReadyGateState();
     eventSeqRef.current = 0;
-    void markRoomWaitingForStart(currentIdentity.room.roomId);
+    void markRoomWaitingForStart(currentIdentity.room.roomId, connectedSignalingServerUrl ?? undefined);
     applyWaitingRoomPhase(currentIdentity.peerId);
     meshRef.current?.broadcastPayload({
       type: 'room_phase_changed',
@@ -1722,8 +1845,18 @@ export function MultiplayerGame() {
   }
 
   async function refreshNameReservation(displayName: string): Promise<void> {
+    if (!connectedSignalingServerUrl) {
+      setMessage('Connect to a signaling server before refreshing player name.');
+      setScene('landing_page');
+      return;
+    }
+
     try {
-      const reservation = await validatePlayerName(displayName, nameReservationTokenRef.current ?? undefined);
+      const reservation = await validatePlayerName(
+        displayName,
+        nameReservationTokenRef.current ?? undefined,
+        connectedSignalingServerUrl,
+      );
       nameReservationTokenRef.current = reservation.nameReservationToken;
     } catch (error) {
       if (Date.now() - lastRoomLeaveAtRef.current < 2500) {
@@ -1748,7 +1881,7 @@ export function MultiplayerGame() {
     }
 
     nameReservationTokenRef.current = null;
-    void releasePlayerNameReservation(token);
+    void releasePlayerNameReservation(token, connectedSignalingServerUrl ?? undefined);
   }
 }
 
@@ -1972,6 +2105,41 @@ function toRoomListItem(room: RoomMetadata): RoomListItemView {
     canJoin,
     joinRole: canJoin ? (room.status === 'playing' ? 'spectator' : 'player') : null,
   };
+}
+
+function getLandingMessage(
+  hasLandingStartInput: boolean,
+  signalingConnectionStatus: SignalingConnectionStatus,
+  message: string,
+): string {
+  if (!hasLandingStartInput) {
+    return 'Player name or re-join code is required.';
+  }
+
+  if (signalingConnectionStatus !== 'connected') {
+    return 'Connect to a signaling server to enable Start.';
+  }
+
+  return message;
+}
+
+function getSignalingConnectionLabel(
+  status: SignalingConnectionStatus,
+  connectedSignalingServerUrl: string | null,
+): string {
+  if (status === 'connected' && connectedSignalingServerUrl) {
+    return `Connected: ${connectedSignalingServerUrl}`;
+  }
+
+  if (status === 'checking') {
+    return 'Connecting...';
+  }
+
+  if (status === 'error') {
+    return 'Connection failed.';
+  }
+
+  return 'Not connected.';
 }
 
 function roomStatusLabel(status: RoomMetadata['status']): string {

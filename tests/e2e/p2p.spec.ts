@@ -305,6 +305,7 @@ test('rejects duplicate online player names before matchmaking', async ({ browse
 
     await enterMatchmaking(peerA.page, names[0]);
     await peerB.page.locator('[data-player-name]').fill(names[0]);
+    await connectSignalingServer(peerB.page);
     await peerB.page.getByRole('button', { name: 'Start' }).click();
     await expect(peerB.page.locator('[data-game-message]')).toContainText('already online');
     await expect(peerB.page.locator('[data-room-list]')).toHaveCount(0);
@@ -332,6 +333,7 @@ test('keeps duplicate names rejected after a player creates a room', async ({ br
     await expect(peerA.page.locator('[data-room-id]')).toBeVisible();
 
     await peerB.page.locator('[data-player-name]').fill(names[0]);
+    await connectSignalingServer(peerB.page);
     await peerB.page.getByRole('button', { name: 'Start' }).click();
     await expect(peerB.page.locator('[data-game-message]')).toContainText('already online');
     await expect(peerB.page.locator('[data-room-list]')).toHaveCount(0);
@@ -378,6 +380,7 @@ test('resumes a disconnected player with a re-join code', async ({ browser }, te
     await peerBResume.page.goto('/');
     await peerBResume.page.locator('[data-player-name]').fill('IgnoredName');
     await peerBResume.page.locator('[data-rejoin-code-input]').fill(rejoinCode);
+    await connectSignalingServer(peerBResume.page);
     await peerBResume.page.getByRole('button', { name: 'Start' }).click();
 
     await expect.poll(() => getLocalPlayerName(peerBResume.page), { timeout: 15000 }).toBe(names[1]);
@@ -459,8 +462,17 @@ function peerNames(prefix: string, projectName: string, count: number) {
 
 async function enterMatchmaking(page: Page, name: string) {
   await page.locator('[data-player-name]').fill(name);
+  await connectSignalingServer(page);
   await page.getByRole('button', { name: 'Start' }).click();
   await expect(page.locator('[data-room-list]')).toBeVisible({ timeout: 15000 });
+}
+
+async function connectSignalingServer(page: Page) {
+  await expect(page.getByRole('button', { name: 'Start' })).toBeDisabled();
+  await page.getByRole('button', { name: '接続' }).click();
+  await expect(page.locator('[data-signaling-status]')).toContainText('Connected', { timeout: 15000 });
+  await expect(page).toHaveURL(/signaling-server=/);
+  await expect(page.getByRole('button', { name: 'Start' })).toBeEnabled();
 }
 
 async function createRoom(page: Page) {

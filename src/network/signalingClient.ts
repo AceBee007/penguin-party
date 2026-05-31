@@ -13,12 +13,58 @@ import type {
   SignalingServerMessage,
 } from './types';
 
+const SIGNALING_SERVER_QUERY_PARAM = 'signaling-server';
+const LEGACY_SIGNALING_SERVER_QUERY_PARAM = 'signal';
 const FALLBACK_SIGNALING_HOST = '127.0.0.1';
 const DEFAULT_SIGNALING_PORT = 15201;
 
 export function getSignalingHttpUrl(): string {
-  const fromQuery = new URLSearchParams(window.location.search).get('signal');
-  return (fromQuery ?? buildDefaultSignalingUrl()).replace(/\/$/, '');
+  const fromQuery = getSignalingServerQueryValue();
+
+  if (fromQuery) {
+    try {
+      return normalizeSignalingHttpUrl(fromQuery);
+    } catch {
+      return normalizeSignalingHttpUrl(buildDefaultSignalingUrl());
+    }
+  }
+
+  return normalizeSignalingHttpUrl(buildDefaultSignalingUrl());
+}
+
+export function normalizeSignalingHttpUrl(rawUrl: string): string {
+  const trimmedUrl = rawUrl.trim();
+
+  if (!trimmedUrl) {
+    throw new Error('Signaling server URL is required.');
+  }
+
+  const urlWithProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmedUrl) ? trimmedUrl : `http://${trimmedUrl}`;
+  const url = new URL(urlWithProtocol);
+
+  if (url.protocol === 'ws:') {
+    url.protocol = 'http:';
+  } else if (url.protocol === 'wss:') {
+    url.protocol = 'https:';
+  } else if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('Signaling server URL must use http, https, ws, or wss.');
+  }
+
+  url.search = '';
+  url.hash = '';
+
+  return url.toString().replace(/\/$/, '');
+}
+
+export function setSignalingServerQuery(httpUrl: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const pageUrl = new URL(window.location.href);
+  pageUrl.searchParams.set(SIGNALING_SERVER_QUERY_PARAM, normalizeSignalingHttpUrl(httpUrl));
+  pageUrl.searchParams.delete(LEGACY_SIGNALING_SERVER_QUERY_PARAM);
+  window.history.replaceState(window.history.state, '', `${pageUrl.pathname}${pageUrl.search}${pageUrl.hash}`);
 }
 
 export function getSignalingWsUrl(httpUrl = getSignalingHttpUrl()): string {
@@ -29,9 +75,11 @@ export function getSignalingWsUrl(httpUrl = getSignalingHttpUrl()): string {
 }
 
 export async function listRooms(httpUrl = getSignalingHttpUrl()): Promise<RoomMetadata[]> {
-  const response = await fetch(`${httpUrl}/rooms`);
-  const payload = (await response.json()) as { rooms: RoomMetadata[] };
-  return payload.rooms;
+  return fetchRooms(normalizeSignalingHttpUrl(httpUrl));
+}
+
+export async function checkSignalingServer(httpUrl = getSignalingHttpUrl()): Promise<void> {
+  await fetchRooms(normalizeSignalingHttpUrl(httpUrl));
 }
 
 export async function createRoom(request: CreateRoomRequest, httpUrl = getSignalingHttpUrl()): Promise<NetworkIdentity> {
@@ -235,6 +283,15 @@ function buildDefaultSignalingUrl(): string {
   return `http://${formatUrlHost(host)}:${port}`;
 }
 
+function getSignalingServerQueryValue(): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  return params.get(SIGNALING_SERVER_QUERY_PARAM) ?? params.get(LEGACY_SIGNALING_SERVER_QUERY_PARAM);
+}
+
 function getDefaultSignalingHost(): string {
   if (typeof window === 'undefined') {
     return FALLBACK_SIGNALING_HOST;
@@ -257,4 +314,20 @@ function readPort(raw: string | undefined, fallback: number): number {
   const port = Number(trimmed);
 
   return Number.isInteger(port) && port > 0 && port <= 65535 ? port : fallback;
+}
+
+async function fetchRooms(httpUrl: string): Promise<RoomMetadata[]> {
+  const response = await fetch(`${httpUrl}/rooms`);
+
+  if (!response.ok) {
+    throw new Error(`Signaling server returned ${response.status}.`);
+  }
+
+  const payload = (await response.json()) as { rooms?: unknown };
+
+  if (!Array.isArray(payload.rooms)) {
+    throw new Error('Signaling server response is invalid.');
+  }
+
+  return payload.rooms as RoomMetadata[];
 }
