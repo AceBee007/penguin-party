@@ -13,7 +13,7 @@ import type {
   SignalingServerMessage,
 } from './types';
 
-const DEFAULT_SIGNALING_URL = 'http://127.0.0.1:8787';
+const DEFAULT_SIGNALING_URL = 'http://127.0.0.1:15201';
 
 export function getSignalingHttpUrl(): string {
   const fromQuery = new URLSearchParams(window.location.search).get('signal');

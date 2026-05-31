@@ -3,7 +3,7 @@ import http from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 
 const HOST = process.env.SIGNALING_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.SIGNALING_PORT ?? 8787);
+const PORT = Number(process.env.SIGNALING_PORT ?? 15201);
 const MAX_PLAYERS = 6;
 const REJOIN_TTL_MS = 3 * 60 * 60 * 1000;
 const LOBBY_RESERVATION_TTL_MS = 30 * 1000;

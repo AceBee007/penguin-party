@@ -9,6 +9,11 @@ npm install
 npm run dev
 ```
 
+Local development ports use the `1520x` range by default:
+
+- Vite app: `http://127.0.0.1:15200`
+- Signaling server: `http://127.0.0.1:15201`
+
 ## Checks
 
 ```sh

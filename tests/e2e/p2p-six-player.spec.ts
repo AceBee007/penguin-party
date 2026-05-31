@@ -31,7 +31,7 @@ test('runs six player mesh, spectator join, locked room, room full, and host ele
     }
 
     const roomList = await peers[0].page.evaluate(async () => {
-      const response = await fetch('http://127.0.0.1:8787/rooms');
+      const response = await fetch('http://127.0.0.1:15201/rooms');
       return response.json() as Promise<{ rooms: Array<{ hasPassword: boolean; roomId: string; status: string }> }>;
     });
     expect(
@@ -62,7 +62,7 @@ test('runs six player mesh, spectator join, locked room, room full, and host ele
     await expect(fullRoom).toContainText('Full');
     const fullJoinResponse = await rejectedPeer.page.evaluate(
       async ({ displayName, targetRoomId }) => {
-        const response = await fetch(`http://127.0.0.1:8787/rooms/${targetRoomId}/join`, {
+        const response = await fetch(`http://127.0.0.1:15201/rooms/${targetRoomId}/join`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ displayName, password: 'iceberg' }),

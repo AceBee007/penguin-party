@@ -98,6 +98,11 @@ flowchart LR
 
 ### Local Node.js signaling server
 
+ローカル開発と E2E test では、サーバー類は `1520x` の port range を使います。
+
+- Vite app: `127.0.0.1:15200`
+- Local Node.js signaling server: `127.0.0.1:15201`
+
 責務:
 
 - ルーム作成
