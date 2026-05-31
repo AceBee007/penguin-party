@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "signaling": "node server/signalingServer.mjs",
+    "dev": "vite --host ${APP_HOST:-0.0.0.0}",
+    "signaling": "SIGNALING_HOST=${SIGNALING_HOST:-0.0.0.0} node server/signalingServer.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",

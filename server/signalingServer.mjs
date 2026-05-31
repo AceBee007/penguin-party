@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 
-const HOST = process.env.SIGNALING_HOST ?? '127.0.0.1';
+const HOST = process.env.SIGNALING_HOST?.trim() || '0.0.0.0';
 const PORT = readPort(process.env.SIGNALING_PORT, 15201);
 const MAX_PLAYERS = 6;
 const REJOIN_TTL_MS = 3 * 60 * 60 * 1000;

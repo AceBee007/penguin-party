@@ -13,13 +13,12 @@ import type {
   SignalingServerMessage,
 } from './types';
 
-const DEFAULT_SIGNALING_HOST = '127.0.0.1';
+const FALLBACK_SIGNALING_HOST = '127.0.0.1';
 const DEFAULT_SIGNALING_PORT = 15201;
-const DEFAULT_SIGNALING_URL = buildDefaultSignalingUrl();
 
 export function getSignalingHttpUrl(): string {
   const fromQuery = new URLSearchParams(window.location.search).get('signal');
-  return (fromQuery ?? DEFAULT_SIGNALING_URL).replace(/\/$/, '');
+  return (fromQuery ?? buildDefaultSignalingUrl()).replace(/\/$/, '');
 }
 
 export function getSignalingWsUrl(httpUrl = getSignalingHttpUrl()): string {
@@ -230,10 +229,22 @@ function buildDefaultSignalingUrl(): string {
     return configuredUrl;
   }
 
-  const host = import.meta.env.VITE_SIGNALING_HOST?.trim() || DEFAULT_SIGNALING_HOST;
+  const host = import.meta.env.VITE_SIGNALING_HOST?.trim() || getDefaultSignalingHost();
   const port = readPort(import.meta.env.VITE_SIGNALING_PORT, DEFAULT_SIGNALING_PORT);
 
-  return `http://${host}:${port}`;
+  return `http://${formatUrlHost(host)}:${port}`;
+}
+
+function getDefaultSignalingHost(): string {
+  if (typeof window === 'undefined') {
+    return FALLBACK_SIGNALING_HOST;
+  }
+
+  return window.location.hostname || FALLBACK_SIGNALING_HOST;
+}
+
+function formatUrlHost(host: string): string {
+  return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 }
 
 function readPort(raw: string | undefined, fallback: number): number {

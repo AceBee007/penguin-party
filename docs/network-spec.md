@@ -98,15 +98,18 @@ flowchart LR
 
 ### Local Node.js signaling server
 
-ローカル開発と E2E test では、サーバー類は `1520x` の port range を使います。
+ローカル開発と E2E test では、サーバー類は `1520x` の port range を使います。npm scripts は同一 LAN の端末から接続できるように、dev server と signaling server を `0.0.0.0` に bind します。
 
-- Vite app: `127.0.0.1:15200`
-- Local Node.js signaling server: `127.0.0.1:15201`
+- Vite app: `127.0.0.1:15200` または `<LAN_IP>:15200`
+- Local Node.js signaling server: `127.0.0.1:15201` または `<LAN_IP>:15201`
 
 port は環境変数から読み込み、空文字または不正な値の場合は上記の default port を使います。
 
+- `APP_HOST`: Vite dev server bind host。default は `0.0.0.0`
 - `APP_PORT`: Vite dev server port
+- `SIGNALING_HOST`: Local Node.js signaling server bind host。default は `0.0.0.0`
 - `SIGNALING_PORT`: Local Node.js signaling server port
+- `VITE_SIGNALING_HOST`: browser client が接続する signaling host。default は現在の page host
 - `VITE_SIGNALING_PORT`: browser client が接続する signaling port
 - `VITE_SIGNALING_URL`: browser client が接続する signaling URL。指定された場合は `VITE_SIGNALING_PORT` より優先する
 

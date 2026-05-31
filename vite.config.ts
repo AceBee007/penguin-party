@@ -2,12 +2,14 @@ import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 const DEFAULT_APP_PORT = 15200;
+const DEFAULT_APP_HOST = '0.0.0.0';
+const appHost = process.env.APP_HOST?.trim() || DEFAULT_APP_HOST;
 const appPort = readPort([process.env.APP_PORT, process.env.PORT], DEFAULT_APP_PORT);
 
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: '127.0.0.1',
+    host: appHost,
     port: appPort,
   },
   test: {
