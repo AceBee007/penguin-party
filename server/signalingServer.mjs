@@ -3,7 +3,7 @@ import http from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 
 const HOST = process.env.SIGNALING_HOST ?? '127.0.0.1';
-const PORT = Number(process.env.SIGNALING_PORT ?? 15201);
+const PORT = readPort(process.env.SIGNALING_PORT, 15201);
 const MAX_PLAYERS = 6;
 const REJOIN_TTL_MS = 3 * 60 * 60 * 1000;
 const LOBBY_RESERVATION_TTL_MS = 30 * 1000;
@@ -127,6 +127,18 @@ wss.on('connection', (socket) => {
 server.listen(PORT, HOST, () => {
   console.log(`Penguin Party signaling server listening on http://${HOST}:${PORT}`);
 });
+
+function readPort(raw, fallback) {
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+
+  if (!trimmed) {
+    return fallback;
+  }
+
+  const port = Number(trimmed);
+
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : fallback;
+}
 
 async function routeHttp(request, response) {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? `${HOST}:${PORT}`}`);

@@ -13,7 +13,9 @@ import type {
   SignalingServerMessage,
 } from './types';
 
-const DEFAULT_SIGNALING_URL = 'http://127.0.0.1:15201';
+const DEFAULT_SIGNALING_HOST = '127.0.0.1';
+const DEFAULT_SIGNALING_PORT = 15201;
+const DEFAULT_SIGNALING_URL = buildDefaultSignalingUrl();
 
 export function getSignalingHttpUrl(): string {
   const fromQuery = new URLSearchParams(window.location.search).get('signal');
@@ -219,4 +221,29 @@ function parseMessage(data: unknown): SignalingServerMessage | null {
   } catch {
     return null;
   }
+}
+
+function buildDefaultSignalingUrl(): string {
+  const configuredUrl = import.meta.env.VITE_SIGNALING_URL?.trim();
+
+  if (configuredUrl) {
+    return configuredUrl;
+  }
+
+  const host = import.meta.env.VITE_SIGNALING_HOST?.trim() || DEFAULT_SIGNALING_HOST;
+  const port = readPort(import.meta.env.VITE_SIGNALING_PORT, DEFAULT_SIGNALING_PORT);
+
+  return `http://${host}:${port}`;
+}
+
+function readPort(raw: string | undefined, fallback: number): number {
+  const trimmed = raw?.trim();
+
+  if (!trimmed) {
+    return fallback;
+  }
+
+  const port = Number(trimmed);
+
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : fallback;
 }

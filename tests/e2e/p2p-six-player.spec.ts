@@ -1,5 +1,10 @@
 import { expect, test, type Browser, type Page } from '@playwright/test';
 
+const SIGNALING_HTTP_URL = `http://127.0.0.1:${readPort(
+  [process.env.SIGNALING_PORT, process.env.VITE_SIGNALING_PORT],
+  15201,
+)}`;
+
 test.setTimeout(180_000);
 
 test('runs six player mesh, spectator join, locked room, room full, and host election', async (
@@ -30,10 +35,10 @@ test('runs six player mesh, spectator join, locked room, room full, and host ele
       throw new Error('Peer A did not create a room.');
     }
 
-    const roomList = await peers[0].page.evaluate(async () => {
-      const response = await fetch('http://127.0.0.1:15201/rooms');
+    const roomList = await peers[0].page.evaluate(async (signalingHttpUrl) => {
+      const response = await fetch(`${signalingHttpUrl}/rooms`);
       return response.json() as Promise<{ rooms: Array<{ hasPassword: boolean; roomId: string; status: string }> }>;
-    });
+    }, SIGNALING_HTTP_URL);
     expect(
       roomList.rooms.some((room) => room.roomId === roomId && room.hasPassword && room.status === 'waiting_for_start'),
     ).toBe(true);
@@ -61,15 +66,15 @@ test('runs six player mesh, spectator join, locked room, room full, and host ele
     await expect(fullRoom).toBeDisabled();
     await expect(fullRoom).toContainText('Full');
     const fullJoinResponse = await rejectedPeer.page.evaluate(
-      async ({ displayName, targetRoomId }) => {
-        const response = await fetch(`http://127.0.0.1:15201/rooms/${targetRoomId}/join`, {
+      async ({ displayName, signalingHttpUrl, targetRoomId }) => {
+        const response = await fetch(`${signalingHttpUrl}/rooms/${targetRoomId}/join`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ displayName, password: 'iceberg' }),
         });
         return response.json() as Promise<{ code: string; message: string }>;
       },
-      { displayName: rejectedPeer.name, targetRoomId: roomId },
+      { displayName: rejectedPeer.name, signalingHttpUrl: SIGNALING_HTTP_URL, targetRoomId: roomId },
     );
     expect(fullJoinResponse.code).toBe('room_full');
 
@@ -192,6 +197,24 @@ async function openPeer(browser: Browser, name: string, viewport: { width: numbe
   });
 
   return { context, page, name, consoleErrors, failedRequests };
+}
+
+function readPort(candidates: Array<string | undefined>, fallback: number): number {
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim();
+
+    if (!trimmed) {
+      continue;
+    }
+
+    const port = Number(trimmed);
+
+    if (Number.isInteger(port) && port > 0 && port <= 65535) {
+      return port;
+    }
+  }
+
+  return fallback;
 }
 
 async function enterMatchmaking(page: Page, name: string) {

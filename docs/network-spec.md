@@ -103,6 +103,13 @@ flowchart LR
 - Vite app: `127.0.0.1:15200`
 - Local Node.js signaling server: `127.0.0.1:15201`
 
+port は環境変数から読み込み、空文字または不正な値の場合は上記の default port を使います。
+
+- `APP_PORT`: Vite dev server port
+- `SIGNALING_PORT`: Local Node.js signaling server port
+- `VITE_SIGNALING_PORT`: browser client が接続する signaling port
+- `VITE_SIGNALING_URL`: browser client が接続する signaling URL。指定された場合は `VITE_SIGNALING_PORT` より優先する
+
 責務:
 
 - ルーム作成
