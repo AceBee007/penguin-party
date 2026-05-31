@@ -20,6 +20,7 @@ import {
   checkSignalingServer,
   createRoom,
   getSignalingHttpUrl,
+  getSignalingServerQueryUrl,
   JoinRoomFailure,
   joinRoom,
   listRooms,
@@ -51,6 +52,8 @@ const ROOM_LIST_POLL_MS = 1600;
 const LOBBY_NAME_RESERVATION_REFRESH_MS = 15 * 1000;
 const AUTO_PLAY_DISCONNECTED_MIN_MS = 5000;
 const AUTO_PLAY_DISCONNECTED_JITTER_MS = 3000;
+
+let autoSignalingConnectAttemptedUrl: string | null = null;
 
 type MultiplayerScene =
   | 'landing_page'
@@ -245,6 +248,17 @@ export function MultiplayerGame() {
       setMessage(error instanceof Error ? error.message : 'Signaling server connection failed.');
     }
   }, [signalingServerUrl]);
+
+  useEffect(() => {
+    const querySignalingServerUrl = getSignalingServerQueryUrl();
+
+    if (!querySignalingServerUrl || autoSignalingConnectAttemptedUrl === querySignalingServerUrl) {
+      return;
+    }
+
+    autoSignalingConnectAttemptedUrl = querySignalingServerUrl;
+    void handleConnectSignalingServer();
+  }, [handleConnectSignalingServer]);
 
   useEffect(() => {
     if (identity || scene !== 'matchmaking_lobby') {

@@ -159,6 +159,7 @@ interface SignalingServerInputView {
 
 - 初期値は `docs/network-spec.md` の signaling server URL 解決ルールに従う
 - URL の query に `signaling-server` がある場合は、その値を初期値として表示する
+- URL の query に `signaling-server` がある場合、初回表示時にその URL へ一度だけ自動で接続確認を行う
 - `接続` を押すと、入力された signaling server の `/rooms` へ接続確認を行う
 - 接続確認が成功した場合だけ、`Start` を enabled にする
 - 接続確認に失敗した場合、`Start` は disabled のままにし、Landing page にエラーを表示する

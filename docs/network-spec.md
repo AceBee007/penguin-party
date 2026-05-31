@@ -116,6 +116,7 @@ port は環境変数から読み込み、空文字または不正な値の場合
 browser client は Landing page の signaling server 入力欄から接続先を選択できます。
 
 - page URL の `signaling-server` query がある場合、その値を signaling server 入力欄の初期値にする
+- page URL の `signaling-server` query がある場合、Landing page の初回表示時にその URL へ一度だけ接続確認を試みる
 - `signaling-server` query がない場合、`VITE_SIGNALING_URL`、`VITE_SIGNALING_HOST` / `VITE_SIGNALING_PORT`、現在の page host + default port の順で初期値を決める
 - ユーザーが signaling server への接続確認に成功した場合、その URL を `signaling-server` query に書き戻す
 - 接続確認は signaling server の `/rooms` に対して行い、成功した接続先だけを以降の room list / room create / room join / WebSocket signaling に使う

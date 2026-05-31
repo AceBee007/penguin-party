@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import type { LegalMove } from './game/types';
@@ -25,6 +25,7 @@ vi.mock('./components/PixiDragStage', () => ({
 
 describe('App', () => {
   beforeEach(() => {
+    vi.unstubAllGlobals();
     window.history.replaceState({}, '', '/');
   });
 
@@ -47,12 +48,21 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: '接続' })).toBeEnabled();
   });
 
-  it('uses the signaling server query as the landing default', () => {
+  it('auto-connects once with the signaling server query', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ rooms: [] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
     window.history.replaceState({}, '', '/?signaling-server=http%3A%2F%2F10.0.0.8%3A15201');
 
     render(<App />);
 
     expect(screen.getByLabelText('Signaling server')).toHaveValue('http://10.0.0.8:15201');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledWith('http://10.0.0.8:15201/rooms');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled());
+    expect(screen.getByText('Connected: http://10.0.0.8:15201')).toBeInTheDocument();
   });
 
   it('renders the local verification game shell for local-test mode', () => {

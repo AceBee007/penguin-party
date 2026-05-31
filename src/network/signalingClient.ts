@@ -19,17 +19,27 @@ const FALLBACK_SIGNALING_HOST = '127.0.0.1';
 const DEFAULT_SIGNALING_PORT = 15201;
 
 export function getSignalingHttpUrl(): string {
-  const fromQuery = getSignalingServerQueryValue();
+  const fromQuery = getSignalingServerQueryUrl();
 
   if (fromQuery) {
-    try {
-      return normalizeSignalingHttpUrl(fromQuery);
-    } catch {
-      return normalizeSignalingHttpUrl(buildDefaultSignalingUrl());
-    }
+    return fromQuery;
   }
 
   return normalizeSignalingHttpUrl(buildDefaultSignalingUrl());
+}
+
+export function getSignalingServerQueryUrl(): string | null {
+  const fromQuery = getSignalingServerQueryValue();
+
+  if (!fromQuery) {
+    return null;
+  }
+
+  try {
+    return normalizeSignalingHttpUrl(fromQuery);
+  } catch {
+    return null;
+  }
 }
 
 export function normalizeSignalingHttpUrl(rawUrl: string): string {
