@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type Page } from '@playwright/test';
+import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
 
 test('syncs one host move and one joiner move over WebRTC DataChannel', async ({ browser }, testInfo) => {
   const names = peerNames('Sync', testInfo.project.name, 2);
@@ -26,6 +26,7 @@ test('syncs one host move and one joiner move over WebRTC DataChannel', async ({
     await expect(peerA.page.locator('[data-player-count]')).toHaveText('2');
     await peerA.page.locator('[data-ready-toggle]').click();
     await expect(peerA.page.locator('[data-ready-status]')).toContainText('準備未完了はあと1名');
+    await expectAllowsFullText(peerA.page.locator('[data-ready-status]'));
     await expect(peerA.page.locator('canvas')).toHaveCount(0);
     await peerB.page.locator('[data-ready-toggle]').click();
 
@@ -227,6 +228,7 @@ test('keeps waiting canvas inside stage frame on a small smartphone viewport', a
     await enterMatchmaking(peer.page, names[0]);
     await createRoom(peer.page);
     await expect(peer.page.locator('[data-waiting-for-snapshot]')).toBeVisible();
+    await expectAllowsFullText(peer.page.locator('[data-game-message]'));
 
     const boxes = await peer.page.evaluate(() => {
       const frame = document.querySelector('.stage-frame')?.getBoundingClientRect();
@@ -248,6 +250,43 @@ test('keeps waiting canvas inside stage frame on a small smartphone viewport', a
     expect(boxes!.waitingTop).toBeGreaterThanOrEqual(boxes!.frameTop - 1);
     expect(boxes!.waitingBottom).toBeLessThanOrEqual(boxes!.frameBottom + 1);
     expect(boxes!.waitingHeight).toBeLessThanOrEqual(boxes!.frameHeight + 1);
+    expect(peer.consoleErrors).toEqual([]);
+    expect(peer.failedRequests).toEqual([]);
+  } finally {
+    await peer.context.close();
+  }
+});
+
+test('allows waiting and result copy to wrap instead of ellipsizing', async ({ browser }) => {
+  const peer = await openPeer(browser, { width: 320, height: 520 });
+
+  try {
+    await peer.page.goto('/');
+    await peer.page.evaluate(() => {
+      const shell = document.querySelector('.app-shell');
+      const probe = document.createElement('section');
+
+      probe.className = 'game-shell';
+      probe.dataset.scene = 'round_result';
+      probe.dataset.styleProbe = 'text-wrap';
+      probe.innerHTML = `
+        <p class="game-message">結果確認中のプレイヤーを待っている（準備未完了はあと12名）</p>
+        <div class="summary-row">
+          <span>#1 VeryLongPlayerNameThatMustRemainFullyVisible</span>
+          <span>+12</span>
+          <strong>12 pts</strong>
+        </div>
+        <div class="ready-gate ready-gate--result">
+          <p class="ready-gate__status">結果確認中のプレイヤーを待っている（準備未完了はあと12名）</p>
+        </div>
+      `;
+      shell?.append(probe);
+    });
+
+    await expectAllowsFullText(peer.page.locator('[data-style-probe="text-wrap"] .game-message'));
+    await expectAllowsFullText(peer.page.locator('[data-style-probe="text-wrap"] .ready-gate__status'));
+    await expectAllowsFullText(peer.page.locator('[data-style-probe="text-wrap"] .summary-row span').first());
+
     expect(peer.consoleErrors).toEqual([]);
     expect(peer.failedRequests).toEqual([]);
   } finally {
@@ -440,6 +479,22 @@ async function readyPlayers(...pages: Page[]) {
     await expect(page.locator('[data-ready-toggle]')).toBeVisible({ timeout: 15000 });
     await page.locator('[data-ready-toggle]').click();
   }
+}
+
+async function expectAllowsFullText(locator: Locator) {
+  const style = await locator.evaluate((node) => {
+    const computedStyle = window.getComputedStyle(node);
+
+    return {
+      overflowX: computedStyle.overflowX,
+      textOverflow: computedStyle.textOverflow,
+      whiteSpace: computedStyle.whiteSpace,
+    };
+  });
+
+  expect(style.overflowX).not.toBe('hidden');
+  expect(style.textOverflow).toBe('clip');
+  expect(style.whiteSpace).not.toBe('nowrap');
 }
 
 async function expectActivePlayer(page: Page, expectedName: string) {

@@ -569,15 +569,20 @@ button {
 }
 
 .ready-gate__status {
-  max-width: min(100%, 360px);
+  max-width: min(100%, 560px);
   margin: 0;
-  overflow: hidden;
   color: #41555b;
   font-size: 12px;
   font-weight: 800;
+  line-height: 1.35;
   text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.ready-gate--result .ready-gate__status {
+  max-width: 100%;
+  text-align: left;
 }
 
 .game-message {
@@ -589,6 +594,18 @@ button {
   font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.game-shell[data-scene="waiting_room"],
+.game-shell[data-scene="round_result"],
+.game-shell[data-scene="game_result"] {
+  .game-message {
+    overflow: visible;
+    line-height: 1.35;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
 }
 
 .action-bar__buttons {
@@ -949,13 +966,23 @@ button {
 
   span {
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   strong {
     flex: 0 0 auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .summary-row {
+    grid-template-columns: minmax(0, 1fr);
+
+    strong {
+      justify-self: start;
+    }
   }
 }
 
