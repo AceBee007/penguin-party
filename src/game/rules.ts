@@ -632,8 +632,8 @@ function endRound(game: GameSessionState): GameSessionState {
     activePlayerId: null,
     endedReason,
   };
-  const summary = buildRoundSummary(endedRound, endedReason);
-  const scoredPlayers = applyRoundSummary(game.players, summary, game.rules);
+  const summary = buildRoundSummary(game, endedRound, endedReason);
+  const scoredPlayers = applyRoundSummary(game.players, summary);
   const nextRevision = game.revision + 1;
   const hasMoreRounds = game.currentRoundIndex + 1 < game.totalRounds;
   const nextGame = withHash({
@@ -657,16 +657,25 @@ function endRound(game: GameSessionState): GameSessionState {
   return nextGame;
 }
 
-function buildRoundSummary(round: RoundState, endedReason: RoundEndReason): RoundSummary {
+function buildRoundSummary(game: GameSessionState, round: RoundState, endedReason: RoundEndReason): RoundSummary {
   const playerResults: RoundPlayerResult[] = round.playerOrder.map((playerId) => {
     const player = round.players[playerId];
+    const gamePlayer = game.players.find((candidate) => candidate.playerId === playerId);
     const remainingCards = player.handCardIds.length;
+    const penaltyDelta = player.status === 'blocked' ? remainingCards : 0;
+    const finishBonusReduction =
+      player.status === 'finished'
+        ? Math.min((gamePlayer?.totalPenalty ?? 0) + penaltyDelta, game.rules.finishBonusPenaltyReduction)
+        : 0;
+    const netPenaltyDelta = penaltyDelta - finishBonusReduction;
 
     return {
       playerId,
       remainingCards,
-      penaltyDelta: player.status === 'blocked' ? remainingCards : 0,
-      receivedFinishBonus: player.status === 'finished',
+      penaltyDelta,
+      finishBonusReduction,
+      netPenaltyDelta,
+      receivedFinishBonus: finishBonusReduction > 0,
       status: player.status,
     };
   });
@@ -683,7 +692,6 @@ function buildRoundSummary(round: RoundState, endedReason: RoundEndReason): Roun
 function applyRoundSummary(
   players: GamePlayerState[],
   summary: RoundSummary,
-  rules: GameRulesConfig,
 ): GamePlayerState[] {
   return players.map((player) => {
     const result = summary.playerResults.find((candidate) => candidate.playerId === player.playerId);
@@ -692,10 +700,7 @@ function applyRoundSummary(
       return player;
     }
 
-    const withPenalty = player.totalPenalty + result.penaltyDelta;
-    const totalPenalty = result.receivedFinishBonus
-      ? Math.max(0, withPenalty - rules.finishBonusPenaltyReduction)
-      : withPenalty;
+    const totalPenalty = Math.max(0, player.totalPenalty + result.netPenaltyDelta);
 
     return {
       ...player,

@@ -21,6 +21,10 @@
 - 各ラウンドで開始プレイヤーを交代する
 - ラウンド終了条件は「全員が出せなくなった」または「全員がカードを出し切った」
 
+ラウンド数の `X` は、ゲーム開始時点で room に player として参加している人数です。
+spectator は `X` に含めません。
+ゲーム開始後に spectator が参加しても、そのゲームの `totalRounds` は変えません。
+
 以後の状態設計も、この前提に合わせます。
 
 ### 設計方針
@@ -97,8 +101,10 @@ interface GameSessionState {
 }
 ```
 
-`GameStatus.waiting_room` はゲーム開始前の待機状態です。
+`GameStatus.waiting_room` は開始待ち状態です。
+room 作成直後、room 参加直後、最終ラウンド結果確認後に room へ戻った状態は、すべて同じ開始待ち状態として扱います。
 signaling server の `RoomMetadata.status` は `docs/network-spec.md` に合わせて `waiting_for_start` / `playing` を使い、UI scene と game session status では `waiting_room` と呼びます。
+最終ラウンド後は `game_result` を表示し、全 online player が結果確認を終えたら `waiting_room` / `waiting_for_start` に戻ります。
 
 ### `GameSessionState` に含めるべきもの
 
@@ -228,12 +234,26 @@ interface RoundPlayerState {
 - `seatingOrder`
 - `startingPlayerOrder`
 - 各 player の `ready`
-- ゲーム開始ボタンの有効可否
+- ready gate の対象 player
+- ゲーム開始可否
 
 離脱済み player は `GameSessionState.players`、`seatingOrder`、配札対象、開始プレイヤー順に含めません。
 host が `waiting_room` 中に離脱した場合、残存 player から新 host を選び、新 host が残存 player だけで開始用 snapshot を作ります。
 古い host や離脱済み player の `playerId`、seat、hand が新しい開始 snapshot に残ってはいけません。
 これにより、3人 room から host が離脱して2人 room になっても、残った2人が正常に手札を持ってゲームを開始できます。
+
+### Ready gate
+
+開始待ちと結果確認画面では、host が online player の ready 状態を集約します。
+spectator と disconnected / closed peer は ready gate の対象に含めません。
+
+- `waiting_room`: 各 player は「準備完了 / 準備中に戻る」を切り替える
+- `round_result`: 各 player は「次のラウンドへ / もう少し結果確認する」を切り替える
+- `game_result`: 各 player は「開始待ちへ戻る / もう少し結果確認する」を切り替える
+- 全対象 player が ready になった時点で host が次状態を確定する
+- `waiting_room` では2人以上の player が対象になるまでゲーム開始しない
+- `round_result` では次ラウンドを開始し、`game_play` へ戻る
+- `game_result` では同じ room を `waiting_room` / `waiting_for_start` に戻す
 
 ### Online player name の一意性
 
@@ -421,8 +441,7 @@ type PeerCommand =
       type: 'resume_game';
       rejoinCode: string;
     }
-  | { type: 'set_ready'; ready: boolean }
-  | { type: 'start_game' }
+  | { type: 'set_ready'; gate: 'waiting_room' | 'round_result' | 'game_result'; ready: boolean }
   | {
       type: 'play_card';
       actionId: string;
@@ -435,13 +454,20 @@ type PeerCommand =
 
 type HostMessage =
   | { type: 'snapshot'; state: ClientGameView }
+  | {
+      type: 'ready_gate_state';
+      gate: 'waiting_room' | 'round_result' | 'game_result';
+      readyPlayerIds: PlayerId[];
+      requiredPlayerIds: PlayerId[];
+    }
   | { type: 'command_rejected'; actionId?: string; reason: string }
   | { type: 'player_presence_changed'; playerId: PlayerId; status: ConnectionStatus }
   | { type: 'player_resumed'; playerId: PlayerId }
   | { type: 'round_started'; roundIndex: number }
   | { type: 'action_resolved'; action: ResolvedAction; state: ClientGameView }
   | { type: 'round_ended'; summary: RoundSummary; state: ClientGameView }
-  | { type: 'game_ended'; result: GameResultView };
+  | { type: 'game_ended'; result: GameResultView }
+  | { type: 'room_phase_changed'; roomStatus: 'waiting_for_start'; hostPeerId: PeerId };
 
 interface ClientGameView {
   publicState: PublicGameView;
@@ -542,6 +568,8 @@ interface RoundPlayerResult {
   playerId: PlayerId;
   remainingCards: number;
   penaltyDelta: number;
+  finishBonusReduction: number;
+  netPenaltyDelta: number;
   receivedFinishBonus: boolean;
   status: RoundPlayerStatus;
 }
@@ -556,6 +584,11 @@ interface FinalStanding {
   totalPenalty: number;
 }
 ```
+
+採点は「未プレイ手札の枚数ぶん失点を増やし、出し切り時は最大2点ぶん失点を減らす」を同じ累積値に対して適用します。
+実装が失点を正の値で保持する場合は、`totalPenalty = max(0, totalPenalty + netPenaltyDelta)` で 0 未満に落ちないようにします。
+実装が score を負の値で保持する場合は、同じ意味を `score = min(0, score + scoreDelta)` として扱えます。
+減点0点の player が出し切った場合、返済は適用せず、`finishBonusReduction` と `netPenaltyDelta` は 0 のままです。
 
 ## 13. 最低限必要な純粋関数
 

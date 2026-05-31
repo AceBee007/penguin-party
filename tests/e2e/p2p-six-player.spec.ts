@@ -78,7 +78,7 @@ test('runs six player mesh, spectator join, locked room, room full, and host ele
       await expect(peer.page.locator('[data-connected-count]')).toHaveText('6', { timeout: 30000 });
     }
 
-    await peers[0].page.locator('[data-start-game]').click();
+    await readyPlayers(...peers.map((peer) => peer.page));
     await expectAll(peers, '[data-revision]', '1');
     await expectAll(peers, '[data-board-count]', '0');
     await expectAllStateHash(peers, await getStateHash(peers[0].page));
@@ -209,6 +209,13 @@ async function joinRoom(page: Page, roomId: string, name: string, password: stri
   await page.locator('[data-join-password]').fill(password);
   await page.locator('[data-join-room-submit]').click();
   await expect.poll(() => getLocalPlayerName(page), { timeout: 15000 }).toBe(name);
+}
+
+async function readyPlayers(...pages: Page[]) {
+  for (const page of pages) {
+    await expect(page.locator('[data-ready-toggle]')).toBeVisible({ timeout: 15000 });
+    await page.locator('[data-ready-toggle]').click();
+  }
 }
 
 async function expectAllActivePlayer(peers: Array<{ page: Page }>, expectedName: string) {

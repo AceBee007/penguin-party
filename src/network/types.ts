@@ -3,6 +3,7 @@ import type { CardId, GameEvent, GameSessionState, MoveTarget, PlayerId } from '
 export type RoomStatus = 'waiting_for_start' | 'playing';
 export type PeerRole = 'host' | 'player' | 'spectator';
 export type PeerConnectionStatus = 'new' | 'signaling' | 'connecting' | 'connected' | 'disconnected' | 'closed';
+export type ReadyGateKind = 'waiting_room' | 'round_result' | 'game_result';
 
 export interface RoomMetadata {
   roomId: string;
@@ -99,9 +100,11 @@ export interface P2PEnvelope<TPayload extends P2PGamePayload = P2PGamePayload> {
 export type P2PGamePayload =
   | HostHello
   | PeerReady
+  | ReadyGateState
   | PlayerCommand
   | CommandRejected
   | EventCommitted
+  | RoomPhaseChanged
   | Heartbeat;
 
 export interface HostHello {
@@ -122,11 +125,20 @@ export interface PeerReady {
   stateHash: string;
 }
 
+export interface ReadyGateState {
+  type: 'ready_gate_state';
+  gate: ReadyGateKind;
+  readyPlayerIds: PlayerId[];
+  requiredPlayerIds: PlayerId[];
+}
+
 export interface PlayerCommand {
   type: 'player_command';
   commandId: string;
   playerId: PlayerId;
-  command: { type: 'play_card'; cardId: CardId; target: MoveTarget };
+  command:
+    | { type: 'play_card'; cardId: CardId; target: MoveTarget }
+    | { type: 'set_ready'; gate: ReadyGateKind; ready: boolean };
   clientRevision: number;
   clientSentAt: number;
 }
@@ -145,6 +157,12 @@ export interface EventCommitted {
   revision: number;
   stateHash: string;
   snapshot: GameSessionState;
+}
+
+export interface RoomPhaseChanged {
+  type: 'room_phase_changed';
+  roomStatus: 'waiting_for_start';
+  hostPeerId: string;
 }
 
 export interface Heartbeat {

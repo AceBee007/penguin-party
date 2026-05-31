@@ -108,6 +108,8 @@ export interface RoundPlayerResult {
   playerId: PlayerId;
   remainingCards: number;
   penaltyDelta: number;
+  finishBonusReduction: number;
+  netPenaltyDelta: number;
   receivedFinishBonus: boolean;
   status: RoundPlayerStatus;
 }

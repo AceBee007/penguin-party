@@ -556,6 +556,30 @@ button {
   min-width: 0;
 }
 
+.ready-gate {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ready-gate--result {
+  justify-items: stretch;
+  margin-top: 4px;
+}
+
+.ready-gate__status {
+  max-width: min(100%, 360px);
+  margin: 0;
+  overflow: hidden;
+  color: #41555b;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .game-message {
   min-width: 0;
   margin: 0;
@@ -915,9 +939,10 @@ button {
 }
 
 .summary-row {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
+  align-items: center;
   color: #17313a;
   font-size: 12px;
   font-weight: 800;

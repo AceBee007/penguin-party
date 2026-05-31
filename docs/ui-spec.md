@@ -499,16 +499,25 @@ interface WaitingRoomPlayerView {
 
 クリックすると、確認 dialog を表示してから matchmaking lobby へ戻ります。
 
-#### ゲーム開始
+#### 準備完了 / 準備中に戻る
 
-host のみ操作可能です。
-クリックするとゲーム開始 command を送信し、成功したら `game_play` へ遷移します。
+開始待ち状態では各 player に ready toggle を表示します。
+クリックするたびに「準備完了」と「準備中に戻る」を切り替えます。
+全 player が準備完了になった時点で、host がゲーム開始を確定し、全員を `game_play` へ遷移させます。
 
 Validation:
 
-- 最低2人以上でないと `ゲーム開始` は disabled
+- 最低2人以上でないとゲーム開始しない
 - 最大6人まで参加可能
-- host 以外はゲーム開始できない
+- host だけが全員 ready 後の開始 snapshot を確定できる
+
+表示:
+
+- 未 ready の場合、button は「準備完了」
+- ready 済みの場合、button は「準備中に戻る」
+- ready 済みの場合、button の下に「他のプレイヤーの準備完了を待っている（準備未完了はあとn名）」を表示する
+- n は ready gate 対象 player のうち未 ready の人数
+- 2人未満の場合は「2名以上で開始できます。」を表示する
 
 ### 参加・退出時の再計算
 
@@ -520,11 +529,11 @@ Validation:
 - player list
 - host badge
 - player count
-- start button の enabled / disabled
+- ready gate の対象 player と ready 状態
 - player の表示順
 - local player の `playerId` / role / host 権限
 
-host が `waiting_room` 中に退出した場合、残存 player のうち新 host になった player だけに「ゲーム開始」ボタンを表示します。
+host が `waiting_room` 中に退出した場合、残存 player から新 host を選び、新 host が ready gate と開始 snapshot の確定を担当します。
 離脱済み player は waiting room の表示、player count、ゲーム開始時の配札対象に残してはいけません。
 新 host がゲーム開始した場合、残存 player 全員が手札を持ち、自分の手番でプレイできる必要があります。
 
@@ -860,6 +869,7 @@ interface OpponentHandView {
 
 各ラウンド終了後に、直前ラウンドの結果と累積集計をランキング形式で表示します。
 最終ラウンド終了後は、同じ結果画面を final game result として扱います。
+最終結果の確認後は、新しい room を作らず同じ room を `waiting_room` / `waiting_for_start` に戻します。
 
 結果画面は毎ラウンド表示します。
 
@@ -873,7 +883,7 @@ interface OpponentHandView {
 - 累積失点
 - 勝者表示
 - 現在ラウンド番号 / 総ラウンド数
-- 次に進むための primary action
+- 次に進むための ready gate primary action
 
 ```ts
 type ResultScreenKind = 'round_result' | 'game_result';
@@ -892,6 +902,8 @@ interface FinalStandingView {
   playerId: string;
   displayName: string;
   roundPenaltyDelta: number;
+  finishBonusReduction: number;
+  netPenaltyDelta: number;
   totalPenalty: number;
   isWinner: boolean;
 }
@@ -915,7 +927,7 @@ interface FinalStandingView {
 2位  Player C   今回 +1   合計 5
 3位  Player B   今回 +4   合計 8
 
-[次のラウンド]
+[次のラウンドへ]
 ```
 
 最終ラウンドの場合:
@@ -929,16 +941,28 @@ interface FinalStandingView {
 2位  Player C   今回 +1   合計 5
 3位  Player B   今回 +4   合計 8
 
-[もう一度遊ぶ]
+[開始待ちへ戻る]
 ```
 
 操作ルール:
 
-- 最終ラウンドではない場合、primary action は「次のラウンド」
-- 最終ラウンドの場合、primary action は「もう一度遊ぶ」
-- 「次のラウンド」は次ラウンドの準備を開始し、`game_play` へ戻る
-- 「もう一度遊ぶ」は同じ room で新しいゲームを作り直し、`waiting_room` または新ゲームの準備画面へ戻る
+- 最終ラウンドではない場合、primary action は「次のラウンドへ」
+- 最終ラウンドの場合、primary action は「開始待ちへ戻る」
+- primary action は ready gate として動作する
+- 「次のラウンドへ」を押すと、その player は ready になり、button は「もう少し結果確認する」に変わる
+- 「開始待ちへ戻る」を押すと、その player は ready になり、button は「もう少し結果確認する」に変わる
+- ready 済みの場合、button の下に「結果確認中のプレイヤーを待っている（準備未完了はあとn名）」を表示する
+- n は ready gate 対象 player のうち未 ready の人数
+- 全 ready になると、`round_result` では次ラウンドを開始して `game_play` へ戻る
+- 全 ready になると、`game_result` では room status を `waiting_for_start` に戻して `waiting_room` へ戻る
 - host authoritative なので、primary action の確定は host の command として扱う
+
+採点表示:
+
+- 未プレイ手札枚数ぶんの失点を加算する
+- 出し切り時は累積失点から最大2点を返済する
+- 累積失点は0未満にしない
+- 減点0点の player が出し切った場合、返済表示は0点のままにする
 
 ## 17. 主要ユーザーフロー
 
@@ -1005,8 +1029,8 @@ interface FinalStandingView {
 8. 盤面と手札が更新される
 9. 脱落または上がりの場合、該当表示を出す
 10. ラウンド終了後、毎回 `round_result` へ遷移する
-11. 最終ラウンドではない場合、「次のラウンド」で `game_play` へ戻る
-12. 最終ラウンドの場合、`game_result` として表示し、「もう一度遊ぶ」を表示する
+11. 最終ラウンドではない場合、「次のラウンドへ」を押すと ready になり、全員 ready 後に `game_play` へ戻る
+12. 最終ラウンドの場合、`game_result` として表示し、「開始待ちへ戻る」を押すと ready になり、全員 ready 後に `waiting_room` へ戻る
 
 ### Waiting room 中の host 退出
 
@@ -1095,8 +1119,9 @@ PixiJS 側は `BoardView` と `LocalHandView` の描画・ドラッグ操作に�
 - プレイヤー名は最大16文字
 - パスワードは最大20文字
 - ラウンドごとに結果画面を毎回表示する
-- ラウンド結果画面には「次のラウンド」を表示する
-- 最終ラウンドの結果画面には「もう一度遊ぶ」を表示する
+- ラウンド結果画面には「次のラウンドへ」を表示する
+- 最終ラウンドの結果画面には「開始待ちへ戻る」を表示する
+- 結果画面の primary action は ready gate で、全 player ready 後に次 scene へ進む
 - ゲーム中の途中参加は spectator として許可する
 - spectator は場のピラミッドと各プレイヤーのカード所持数だけを見られる
 - spectator は各プレイヤーの手札の色やカード内容を見られない

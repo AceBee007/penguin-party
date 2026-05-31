@@ -74,7 +74,7 @@
   - `playerId` と seat index の割り当て
   - `seatingOrder`
   - `startingPlayerOrder`
-  - `ready` / start button の有効状態
+  - `ready` / ready gate の対象 player と ready 状態
 - 離脱済み player は、ゲーム開始時の player list と配札対象に含めない。
 - host が離脱した場合、新 host は残存 player だけで開始用 snapshot を作成する。
 - ゲーム開始後、各 online player は自分の `playerId` に対応した手札と合法手を必ず受け取る。

@@ -7,6 +7,7 @@ import type {
   PlayerNameReservation,
   ResumeGameRequest,
   ResumeGameResponse,
+  RoomStatus,
   RoomMetadata,
   SignalingClientMessage,
   SignalingServerMessage,
@@ -149,10 +150,18 @@ export class JoinRoomFailure extends Error {
 }
 
 export async function markRoomPlaying(roomId: string, httpUrl = getSignalingHttpUrl()): Promise<void> {
+  await updateRoomStatus(roomId, 'playing', httpUrl);
+}
+
+export async function markRoomWaitingForStart(roomId: string, httpUrl = getSignalingHttpUrl()): Promise<void> {
+  await updateRoomStatus(roomId, 'waiting_for_start', httpUrl);
+}
+
+async function updateRoomStatus(roomId: string, status: RoomStatus, httpUrl = getSignalingHttpUrl()): Promise<void> {
   await fetch(`${httpUrl}/rooms/${roomId}/status`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ status: 'playing' }),
+    body: JSON.stringify({ status }),
   });
 }
 

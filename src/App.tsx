@@ -178,7 +178,7 @@ function LocalGame() {
               {latestSummary.playerResults.map((result) => (
                 <div className="summary-row" key={result.playerId}>
                   <span>{game.players.find((player) => player.playerId === result.playerId)?.displayName}</span>
-                  <strong>{result.penaltyDelta} pts</strong>
+                  <strong>{formatPenaltyDelta(result.netPenaltyDelta)} pts</strong>
                 </div>
               ))}
             </div>
@@ -199,4 +199,12 @@ function LocalGame() {
       </section>
     </main>
   );
+}
+
+function formatPenaltyDelta(penaltyDelta: number): string {
+  if (penaltyDelta === 0) {
+    return '+0';
+  }
+
+  return penaltyDelta > 0 ? `+${penaltyDelta}` : String(penaltyDelta);
 }

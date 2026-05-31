@@ -198,6 +198,44 @@ describe('Penguin Party rules', () => {
     expect(scored.players.find((player) => player.playerId === 'player-2')?.totalPenalty).toBe(4);
   });
 
+  it('does not apply finish reduction below zero total penalty', () => {
+    let game = createLocalGame({ playerCount: 2, seed: 'zero-cap-test' });
+
+    game = {
+      ...game,
+      currentRoundIndex: 1,
+      currentRound: {
+        ...game.currentRound!,
+        activePlayerId: 'player-1',
+        players: {
+          'player-1': {
+            ...game.currentRound!.players['player-1'],
+            handCardIds: [game.currentRound!.players['player-1'].handCardIds[0]],
+            remainingCardCount: 1,
+          },
+          'player-2': {
+            ...game.currentRound!.players['player-2'],
+            status: 'blocked',
+            blockedAtTurn: 1,
+            handCardIds: [],
+            remainingCardCount: 0,
+            roundPenaltyDelta: 0,
+          },
+        },
+        eliminatedPlayerIds: ['player-2'],
+      },
+    };
+
+    const finishingMove = getLegalMovesForPlayer(game, 'player-1')[0];
+    const scored = playCard(game, 'player-1', finishingMove.cardId, finishingMove.target).state;
+    const playerResult = scored.completedRounds.at(-1)?.playerResults.find((result) => result.playerId === 'player-1');
+
+    expect(scored.players.find((player) => player.playerId === 'player-1')?.totalPenalty).toBe(0);
+    expect(playerResult?.finishBonusReduction).toBe(0);
+    expect(playerResult?.netPenaltyDelta).toBe(0);
+    expect(playerResult?.receivedFinishBonus).toBe(false);
+  });
+
   it('starts the next round with the next starting player when a round result is available', () => {
     let game = createLocalGame({ playerCount: 2, seed: 'next-round' });
 

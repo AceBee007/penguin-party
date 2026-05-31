@@ -11,6 +11,7 @@ import {
   getLegalMovesForPlayer,
   playCard,
   resolveCurrentPlayerNoMoves,
+  startNextRound,
 } from '../game/rules';
 import type { CardId, GameSessionState, MoveTarget, PlayerId, RoundPlayerState } from '../game/types';
 import { electNextHostPeerId } from '../network/hostElection';
@@ -21,6 +22,7 @@ import {
   joinRoom,
   listRooms,
   markRoomPlaying,
+  markRoomWaitingForStart,
   releasePlayerNameReservation,
   resumeGame,
   validatePlayerName,
@@ -33,6 +35,8 @@ import type {
   P2PEnvelope,
   PeerReady,
   PeerRuntimeView,
+  ReadyGateKind,
+  ReadyGateState,
   PeerSummary,
   PlayerCommand,
   RoomMetadata,
@@ -79,6 +83,7 @@ export function MultiplayerGame() {
   const [isLeaveConfirmOpen, setIsLeaveConfirmOpen] = useState(false);
   const [isScoreboardExpanded, setIsScoreboardExpanded] = useState(false);
   const [isBoardMaximized, setIsBoardMaximized] = useState(false);
+  const [readyByPlayerId, setReadyByPlayerId] = useState<Record<PlayerId, boolean>>({});
   const [passwordRoom, setPasswordRoom] = useState<RoomListItemView | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [joiningRoomId, setJoiningRoomId] = useState<string | null>(null);
@@ -95,6 +100,8 @@ export function MultiplayerGame() {
   const identityRef = useRef<NetworkIdentity | null>(null);
   const gameRef = useRef<GameSessionState | null>(null);
   const peersRef = useRef<PeerRuntimeView[]>([]);
+  const readyByPlayerIdRef = useRef<Record<PlayerId, boolean>>({});
+  const readyGateRef = useRef<ReadyGateKind | null>(null);
   const hostPeerIdRef = useRef<string | null>(null);
   const eventSeqRef = useRef(0);
   const autoPlayTimeoutRef = useRef<number | null>(null);
@@ -125,6 +132,10 @@ export function MultiplayerGame() {
   }, [peers]);
 
   useEffect(() => {
+    readyByPlayerIdRef.current = readyByPlayerId;
+  }, [readyByPlayerId]);
+
+  useEffect(() => {
     hostPeerIdRef.current = hostPeerId;
   }, [hostPeerId]);
 
@@ -134,8 +145,9 @@ export function MultiplayerGame() {
       hostPeerId,
       identity,
       peers,
+      readyByPlayerId,
     };
-  }, [game, hostPeerId, identity, peers]);
+  }, [game, hostPeerId, identity, peers, readyByPlayerId]);
 
   useEffect(
     () => () => {
@@ -271,10 +283,10 @@ export function MultiplayerGame() {
   );
   const activeRoundPlayer = game && localPlayerId ? getCurrentRoundPlayer(game, localPlayerId) : null;
   const standings = game ? getFinalStandings(game) : [];
+  const latestSummary = game?.completedRounds.at(-1) ?? null;
   const connectedPeerCount = peers.filter((peer) => peer.connectionStatus === 'connected').length;
   const playerCount = peers.filter((peer) => peer.role !== 'spectator').length;
   const spectatorCount = peers.filter((peer) => peer.role === 'spectator').length;
-  const canStartGame = Boolean(isHost && !game && playerCount >= 2);
   const currentScene = useMemo<MultiplayerScene>(() => {
     if (!identity) {
       return scene;
@@ -295,12 +307,59 @@ export function MultiplayerGame() {
     return 'waiting_room';
   }, [game, identity, scene]);
   const canMaximizeSpectatorBoard = currentScene === 'game_play' && isSpectator && Boolean(game);
+  const currentReadyGate = getReadyGateKind(identity, game);
+  const readyGatePlayerIds = useMemo(
+    () => (identity && currentReadyGate ? getReadyGatePlayerIds(identity, peers, game) : []),
+    [currentReadyGate, game, identity, peers],
+  );
+  const readyGatePlayerKey = readyGatePlayerIds.join('|');
+  const localReady = Boolean(localPlayerId && readyByPlayerId[localPlayerId]);
+  const readyGateRemainingCount = readyGatePlayerIds.filter((playerId) => !readyByPlayerId[playerId]).length;
+  const readyGateActionLabel = currentReadyGate ? readyActionLabel(currentReadyGate, localReady) : '';
+  const readyGateStatusText = currentReadyGate
+    ? readyStatusText(currentReadyGate, localReady, readyGateRemainingCount, readyGatePlayerIds.length)
+    : '';
 
   useEffect(() => {
     if (!canMaximizeSpectatorBoard) {
       setIsBoardMaximized(false);
     }
   }, [canMaximizeSpectatorBoard]);
+
+  useEffect(() => {
+    if (readyGateRef.current !== currentReadyGate) {
+      readyGateRef.current = currentReadyGate;
+      readyByPlayerIdRef.current = {};
+      setReadyByPlayerId({});
+      return;
+    }
+
+    if (!currentReadyGate) {
+      return;
+    }
+
+    const allowedPlayerIds = new Set(readyGatePlayerIds);
+    setReadyByPlayerId((current) => {
+      const nextReady = Object.fromEntries(
+        Object.entries(current).filter(([playerId, ready]) => ready && allowedPlayerIds.has(playerId)),
+      );
+
+      if (Object.keys(nextReady).length === Object.keys(current).length) {
+        return current;
+      }
+
+      readyByPlayerIdRef.current = nextReady;
+      return nextReady;
+    });
+  }, [currentReadyGate, readyGatePlayerKey, readyGatePlayerIds]);
+
+  useEffect(() => {
+    if (!isHost || !currentReadyGate || readyGatePlayerIds.length === 0 || readyGateRemainingCount > 0) {
+      return;
+    }
+
+    evaluateReadyGate(currentReadyGate, readyByPlayerIdRef.current, readyGatePlayerIds);
+  }, [currentReadyGate, isHost, readyGatePlayerIds, readyGateRemainingCount]);
 
   useEffect(() => {
     if (!isBoardMaximized) {
@@ -396,8 +455,15 @@ export function MultiplayerGame() {
       onChannelOpen: (peer) => {
         setMessage(`DataChannel open with ${peer.displayName}.`);
 
-        if (nextIdentity.peerId === hostPeerIdRef.current && gameRef.current) {
-          sendHostHello(nextIdentity, peer, gameRef.current);
+        const currentIdentity = identityRef.current ?? nextIdentity;
+        if (currentIdentity.peerId === hostPeerIdRef.current && gameRef.current) {
+          sendHostHello(currentIdentity, peer, gameRef.current);
+          return;
+        }
+
+        const gate = getReadyGateKind(currentIdentity, gameRef.current);
+        if (currentIdentity.peerId === hostPeerIdRef.current && gate) {
+          sendReadyGateStateToPeer(currentIdentity, peer, gate);
         }
       },
       onPeerLeft: (peerId) => {
@@ -576,39 +642,34 @@ export function MultiplayerGame() {
     handleLeaveRoom();
   }, [handleLeaveRoom]);
 
-  const handleStartGame = useCallback(() => {
+  const handleToggleReady = useCallback(() => {
     const currentIdentity = identityRef.current;
+    const playerId = currentIdentity?.playerId ?? null;
+    const gate = getReadyGateKind(currentIdentity, gameRef.current);
+    const currentHostPeerId = hostPeerIdRef.current;
 
-    if (!currentIdentity || currentIdentity.peerId !== hostPeerIdRef.current) {
+    if (!currentIdentity || !playerId || !currentHostPeerId || currentIdentity.role === 'spectator' || !gate) {
       return;
     }
 
-    const playerPeers = getPlayerPeers(currentIdentity, peersRef.current);
-    const snapshot = createLocalGame({
-      playerCount: playerPeers.length,
-      playerIds: playerPeers.map((peer) => peer.playerId),
-      playerNames: playerPeers.map((peer) => peer.displayName),
-      seed: `room-${currentIdentity.room.roomId}`,
-    });
+    const ready = !readyByPlayerIdRef.current[playerId];
 
-    eventSeqRef.current = 0;
-    gameRef.current = snapshot;
-    setGame(snapshot);
-    void markRoomPlaying(currentIdentity.room.roomId);
-    const playingIdentity = {
-      ...currentIdentity,
-      room: { ...currentIdentity.room, status: 'playing' as const },
-    };
-    identityRef.current = playingIdentity;
-    setIdentity(playingIdentity);
-    setScene('game_play');
-    setMessage(`Started ${playerPeers.length}-player game.`);
-
-    for (const peer of peersRef.current) {
-      if (peer.peerId !== currentIdentity.peerId) {
-        sendHostHello(currentIdentity, peer, snapshot);
-      }
+    if (currentIdentity.peerId === currentHostPeerId) {
+      applyReadyGateUpdate(gate, playerId, ready);
+      return;
     }
+
+    const command: PlayerCommand = {
+      type: 'player_command',
+      commandId: createCommandId(),
+      playerId,
+      command: { type: 'set_ready', gate, ready },
+      clientRevision: gameRef.current?.revision ?? 0,
+      clientSentAt: Date.now(),
+    };
+    readyByPlayerIdRef.current = { ...readyByPlayerIdRef.current, [playerId]: ready };
+    setReadyByPlayerId(readyByPlayerIdRef.current);
+    meshRef.current?.sendPayload(currentHostPeerId, command);
   }, []);
 
   const handlePlayCard = useCallback((cardId: CardId, target: MoveTarget) => {
@@ -884,7 +945,13 @@ export function MultiplayerGame() {
                 <div className="player-row" data-active={peer.playerId === activePlayer?.playerId} key={peer.peerId}>
                   <div>
                     <strong>{peer.displayName}</strong>
-                    <span>{game ? peer.role : `${peer.role} / ${peer.connectionStatus}`}</span>
+                    <span>
+                      {currentReadyGate && peer.playerId
+                        ? `${peer.role} / ${readyByPlayerId[peer.playerId] ? 'ready' : 'preparing'}`
+                        : game
+                          ? peer.role
+                          : `${peer.role} / ${peer.connectionStatus}`}
+                    </span>
                   </div>
                   <div className="player-row__stats">
                     <span>{peer.playerId ?? 'spectator'}</span>
@@ -943,16 +1010,27 @@ export function MultiplayerGame() {
 
           <section className="play-area">
             <div className="action-bar">
-              <div className="action-bar__buttons">
-                {canStartGame ? (
-                  <button data-start-game type="button" onClick={handleStartGame}>
-                    Start game
+              {currentReadyGate === 'waiting_room' && !isSpectator ? (
+                <div className="ready-gate" data-ready-gate={currentReadyGate}>
+                  <div className="action-bar__buttons">
+                    <button data-ready-toggle data-start-game type="button" onClick={handleToggleReady}>
+                      {readyGateActionLabel}
+                    </button>
+                    <button type="button" onClick={handleLeaveClick}>
+                      Leave
+                    </button>
+                  </div>
+                  {localReady || readyGatePlayerIds.length < 2 ? (
+                    <p className="ready-gate__status" data-ready-status>{readyGateStatusText}</p>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="action-bar__buttons">
+                  <button type="button" onClick={handleLeaveClick}>
+                    Leave
                   </button>
-                ) : null}
-                <button type="button" onClick={handleLeaveClick}>
-                  Leave
-                </button>
-              </div>
+                </div>
+              )}
             </div>
 
             <div className="stage-frame">
@@ -1059,15 +1137,35 @@ export function MultiplayerGame() {
               </div>
             </div>
 
-            {game?.status === 'game_result' ? (
-              <div className="summary-panel" data-game-result>
-                <h2>Final</h2>
-                {standings.map((standing) => (
-                  <div className="summary-row" key={standing.playerId}>
-                    <span>#{standing.rank} {standing.displayName}</span>
-                    <strong>{standing.totalPenalty} pts</strong>
+            {game?.status === 'round_result' || game?.status === 'game_result' ? (
+              <div className="summary-panel" data-game-result={game.status === 'game_result' ? 'true' : undefined} data-round-result>
+                <h2>
+                  {game.status === 'game_result' ? 'Final result' : 'Round result'}{' '}
+                  {latestSummary ? `${latestSummary.roundIndex + 1} / ${game.totalRounds}` : ''}
+                </h2>
+                {standings.map((standing) => {
+                  const roundResult = latestSummary?.playerResults.find(
+                    (result) => result.playerId === standing.playerId,
+                  );
+
+                  return (
+                    <div className="summary-row" key={standing.playerId}>
+                      <span>#{standing.rank} {standing.displayName}</span>
+                      <span>{formatPenaltyDelta(roundResult?.netPenaltyDelta ?? 0)}</span>
+                      <strong>{standing.totalPenalty} pts</strong>
+                    </div>
+                  );
+                })}
+                {currentReadyGate && !isSpectator ? (
+                  <div className="ready-gate ready-gate--result" data-ready-gate={currentReadyGate}>
+                    <button data-ready-toggle type="button" onClick={handleToggleReady}>
+                      {readyGateActionLabel}
+                    </button>
+                    {localReady ? (
+                      <p className="ready-gate__status" data-ready-status>{readyGateStatusText}</p>
+                    ) : null}
                   </div>
-                ))}
+                ) : null}
               </div>
             ) : null}
           </aside>
@@ -1112,7 +1210,17 @@ export function MultiplayerGame() {
       return;
     }
 
+    if (payload.type === 'ready_gate_state') {
+      applyReadyGateSnapshot(payload);
+      return;
+    }
+
     if (payload.type === 'player_command' && identityRef.current?.peerId === hostPeerIdRef.current) {
+      if (payload.command.type === 'set_ready') {
+        applyReadyGateUpdate(payload.command.gate, payload.playerId, payload.command.ready);
+        return;
+      }
+
       commitHostMove(payload.playerId, payload.command.cardId, payload.command.target, envelope.fromPeerId, payload.commandId);
       return;
     }
@@ -1121,6 +1229,11 @@ export function MultiplayerGame() {
       gameRef.current = payload.snapshot;
       setGame(payload.snapshot);
       setMessage(`Committed event ${payload.eventSeq}; revision ${payload.revision}.`);
+      return;
+    }
+
+    if (payload.type === 'room_phase_changed') {
+      applyWaitingRoomPhase(payload.hostPeerId);
       return;
     }
 
@@ -1146,6 +1259,201 @@ export function MultiplayerGame() {
     if (payload.type === 'command_rejected') {
       setMessage(`Command rejected: ${payload.reason}`);
     }
+  }
+
+  function applyReadyGateUpdate(gate: ReadyGateKind, playerId: PlayerId, ready: boolean): void {
+    const currentIdentity = identityRef.current;
+    const currentGate = getReadyGateKind(currentIdentity, gameRef.current);
+
+    if (!currentIdentity || currentIdentity.peerId !== hostPeerIdRef.current || gate !== currentGate) {
+      return;
+    }
+
+    const requiredPlayerIds = getReadyGatePlayerIds(currentIdentity, peersRef.current, gameRef.current);
+
+    if (!requiredPlayerIds.includes(playerId)) {
+      return;
+    }
+
+    const nextReady = pruneReadyState(readyByPlayerIdRef.current, requiredPlayerIds);
+
+    if (ready) {
+      nextReady[playerId] = true;
+    } else {
+      delete nextReady[playerId];
+    }
+
+    readyByPlayerIdRef.current = nextReady;
+    setReadyByPlayerId(nextReady);
+    broadcastReadyGateState(gate, nextReady, requiredPlayerIds);
+    evaluateReadyGate(gate, nextReady, requiredPlayerIds);
+  }
+
+  function applyReadyGateSnapshot(payload: ReadyGateState): void {
+    const currentGate = getReadyGateKind(identityRef.current, gameRef.current);
+
+    if (payload.gate !== currentGate) {
+      return;
+    }
+
+    const allowedPlayerIds = new Set(payload.requiredPlayerIds);
+    const nextReady = Object.fromEntries(
+      payload.readyPlayerIds.filter((playerId) => allowedPlayerIds.has(playerId)).map((playerId) => [playerId, true]),
+    );
+    readyByPlayerIdRef.current = nextReady;
+    setReadyByPlayerId(nextReady);
+  }
+
+  function evaluateReadyGate(
+    gate: ReadyGateKind,
+    readyState: Record<PlayerId, boolean>,
+    requiredPlayerIds: PlayerId[],
+  ): void {
+    const currentIdentity = identityRef.current;
+
+    if (!currentIdentity || currentIdentity.peerId !== hostPeerIdRef.current) {
+      return;
+    }
+
+    if (gate === 'waiting_room' && requiredPlayerIds.length < 2) {
+      return;
+    }
+
+    if (requiredPlayerIds.length === 0 || requiredPlayerIds.some((playerId) => !readyState[playerId])) {
+      return;
+    }
+
+    if (gate === 'waiting_room') {
+      startGameFromReadyGate(requiredPlayerIds);
+      return;
+    }
+
+    if (gate === 'round_result') {
+      startNextRoundFromReadyGate();
+      return;
+    }
+
+    returnRoomToWaitingFromReadyGate();
+  }
+
+  function startGameFromReadyGate(requiredPlayerIds: PlayerId[]): void {
+    const currentIdentity = identityRef.current;
+
+    if (!currentIdentity || currentIdentity.peerId !== hostPeerIdRef.current) {
+      return;
+    }
+
+    const required = new Set(requiredPlayerIds);
+    const playerPeers = getPlayerPeers(currentIdentity, peersRef.current).filter((peer) => required.has(peer.playerId));
+
+    if (playerPeers.length < 2) {
+      return;
+    }
+
+    const snapshot = createLocalGame({
+      playerCount: playerPeers.length,
+      playerIds: playerPeers.map((peer) => peer.playerId),
+      playerNames: playerPeers.map((peer) => peer.displayName),
+      seed: `room-${currentIdentity.room.roomId}`,
+    });
+
+    clearReadyGateState();
+    eventSeqRef.current = 0;
+    gameRef.current = snapshot;
+    setGame(snapshot);
+    void markRoomPlaying(currentIdentity.room.roomId);
+    const playingIdentity = {
+      ...currentIdentity,
+      room: { ...currentIdentity.room, status: 'playing' as const },
+    };
+    identityRef.current = playingIdentity;
+    setIdentity(playingIdentity);
+    setScene('game_play');
+    setMessage(`Started ${playerPeers.length}-player game.`);
+
+    for (const peer of peersRef.current) {
+      if (peer.peerId !== currentIdentity.peerId) {
+        sendHostHello(playingIdentity, peer, snapshot);
+      }
+    }
+  }
+
+  function startNextRoundFromReadyGate(): void {
+    const currentGame = gameRef.current;
+
+    if (!currentGame || currentGame.status !== 'round_result') {
+      return;
+    }
+
+    const nextGame = startNextRound(currentGame);
+    clearReadyGateState();
+    commitHostResolvedState(nextGame);
+    setScene('game_play');
+  }
+
+  function returnRoomToWaitingFromReadyGate(): void {
+    const currentIdentity = identityRef.current;
+
+    if (!currentIdentity || currentIdentity.peerId !== hostPeerIdRef.current) {
+      return;
+    }
+
+    clearReadyGateState();
+    eventSeqRef.current = 0;
+    void markRoomWaitingForStart(currentIdentity.room.roomId);
+    applyWaitingRoomPhase(currentIdentity.peerId);
+    meshRef.current?.broadcastPayload({
+      type: 'room_phase_changed',
+      roomStatus: 'waiting_for_start',
+      hostPeerId: currentIdentity.peerId,
+    });
+  }
+
+  function applyWaitingRoomPhase(nextHostPeerId: string): void {
+    const currentIdentity = identityRef.current;
+
+    if (!currentIdentity) {
+      return;
+    }
+
+    const waitingIdentity: NetworkIdentity = {
+      ...currentIdentity,
+      room: {
+        ...currentIdentity.room,
+        hostPeerId: nextHostPeerId,
+        status: 'waiting_for_start',
+      },
+    };
+    identityRef.current = waitingIdentity;
+    gameRef.current = null;
+    hostPeerIdRef.current = nextHostPeerId;
+    meshRef.current?.setHostPeerId(nextHostPeerId);
+    setIdentity(waitingIdentity);
+    setGame(null);
+    setHostPeerId(nextHostPeerId);
+    setScene('waiting_room');
+    setMessage('Returned to waiting room.');
+  }
+
+  function broadcastReadyGateState(
+    gate: ReadyGateKind,
+    readyState: Record<PlayerId, boolean>,
+    requiredPlayerIds: PlayerId[],
+  ): void {
+    const payload: ReadyGateState = {
+      type: 'ready_gate_state',
+      gate,
+      readyPlayerIds: requiredPlayerIds.filter((playerId) => readyState[playerId]),
+      requiredPlayerIds,
+    };
+
+    meshRef.current?.broadcastPayload(payload);
+  }
+
+  function clearReadyGateState(): void {
+    readyGateRef.current = null;
+    readyByPlayerIdRef.current = {};
+    setReadyByPlayerId({});
   }
 
   function handlePeerLeft(peerId: string): void {
@@ -1246,6 +1554,23 @@ export function MultiplayerGame() {
       playerIdByPeerId: Object.fromEntries(allPeers.map((item) => [item.peerId, item.playerId])),
       roleByPeerId: Object.fromEntries(allPeers.map((item) => [item.peerId, item.role])),
       snapshot: peer.role === 'spectator' ? redactGameForSpectator(snapshot) : snapshot,
+    };
+
+    meshRef.current?.sendPayload(peer.peerId, payload);
+  }
+
+  function sendReadyGateStateToPeer(
+    currentIdentity: NetworkIdentity,
+    peer: PeerSummary | PeerRuntimeView,
+    gate: ReadyGateKind,
+  ): void {
+    const requiredPlayerIds = getReadyGatePlayerIds(currentIdentity, peersRef.current, gameRef.current);
+    const readyState = pruneReadyState(readyByPlayerIdRef.current, requiredPlayerIds);
+    const payload: ReadyGateState = {
+      type: 'ready_gate_state',
+      gate,
+      readyPlayerIds: requiredPlayerIds.filter((playerId) => readyState[playerId]),
+      requiredPlayerIds,
     };
 
     meshRef.current?.sendPayload(peer.peerId, payload);
@@ -1462,6 +1787,94 @@ function selectWaitingRoomHost(peers: PeerRuntimeView[]): PeerRuntimeView | null
       .filter((peer): peer is PeerRuntimeView & { playerId: PlayerId } => peer.playerId !== null)
       .sort((left, right) => numericPlayerIndex(left.playerId) - numericPlayerIndex(right.playerId))[0] ?? null
   );
+}
+
+function getReadyGateKind(identity: NetworkIdentity | null, game: GameSessionState | null): ReadyGateKind | null {
+  if (!identity || identity.role === 'spectator') {
+    return null;
+  }
+
+  if (!game && identity.room.status === 'waiting_for_start') {
+    return 'waiting_room';
+  }
+
+  if (game?.status === 'round_result' || game?.status === 'game_result') {
+    return game.status;
+  }
+
+  return null;
+}
+
+function getReadyGatePlayerIds(
+  identity: NetworkIdentity,
+  peers: PeerRuntimeView[],
+  game: GameSessionState | null,
+): PlayerId[] {
+  const onlinePlayerIds = new Set(
+    getPlayerPeers(identity, peers)
+      .filter((peer) => peer.connectionStatus !== 'closed' && peer.connectionStatus !== 'disconnected')
+      .map((peer) => peer.playerId),
+  );
+
+  if (game) {
+    return game.players.map((player) => player.playerId).filter((playerId) => onlinePlayerIds.has(playerId));
+  }
+
+  return [...onlinePlayerIds].sort((left, right) => numericPlayerIndex(left) - numericPlayerIndex(right));
+}
+
+function pruneReadyState(
+  readyState: Record<PlayerId, boolean>,
+  requiredPlayerIds: PlayerId[],
+): Record<PlayerId, boolean> {
+  const required = new Set(requiredPlayerIds);
+
+  return Object.fromEntries(Object.entries(readyState).filter(([playerId, ready]) => ready && required.has(playerId)));
+}
+
+function readyActionLabel(gate: ReadyGateKind, isReady: boolean): string {
+  if (isReady) {
+    return gate === 'waiting_room' ? '準備中に戻る' : 'もう少し結果確認する';
+  }
+
+  if (gate === 'round_result') {
+    return '次のラウンドへ';
+  }
+
+  if (gate === 'game_result') {
+    return '開始待ちへ戻る';
+  }
+
+  return '準備完了';
+}
+
+function readyStatusText(
+  gate: ReadyGateKind,
+  isReady: boolean,
+  remainingCount: number,
+  playerCount: number,
+): string {
+  if (gate === 'waiting_room' && playerCount < 2) {
+    return '2名以上で開始できます。';
+  }
+
+  if (!isReady) {
+    return '';
+  }
+
+  if (gate === 'waiting_room') {
+    return `他のプレイヤーの準備完了を待っている（準備未完了はあと${remainingCount}名）`;
+  }
+
+  return `結果確認中のプレイヤーを待っている（準備未完了はあと${remainingCount}名）`;
+}
+
+function formatPenaltyDelta(penaltyDelta: number): string {
+  if (penaltyDelta === 0) {
+    return '+0';
+  }
+
+  return penaltyDelta > 0 ? `+${penaltyDelta}` : String(penaltyDelta);
 }
 
 function redactGameForSpectator(game: GameSessionState): GameSessionState {

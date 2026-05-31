@@ -24,7 +24,10 @@ test('syncs one host move and one joiner move over WebRTC DataChannel', async ({
     await expect(peerA.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
     await expect(peerB.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
     await expect(peerA.page.locator('[data-player-count]')).toHaveText('2');
-    await peerA.page.locator('[data-start-game]').click();
+    await peerA.page.locator('[data-ready-toggle]').click();
+    await expect(peerA.page.locator('[data-ready-status]')).toContainText('準備未完了はあと1名');
+    await expect(peerA.page.locator('canvas')).toHaveCount(0);
+    await peerB.page.locator('[data-ready-toggle]').click();
 
     await expect(peerA.page.locator('canvas')).toBeVisible();
     await expect(peerB.page.locator('canvas')).toBeVisible();
@@ -90,7 +93,7 @@ test('starts correctly after the waiting room host leaves', async ({ browser }, 
     await expect.poll(() => getLocalRole(peerB.page), { timeout: 15000 }).toBe('host');
     await expect(peerB.page.locator('[data-player-count]')).toHaveText('2', { timeout: 15000 });
     await expect(peerC.page.locator('[data-player-count]')).toHaveText('2', { timeout: 15000 });
-    await peerB.page.locator('[data-start-game]').click();
+    await readyPlayers(peerB.page, peerC.page);
 
     await expect(peerB.page.locator('canvas')).toBeVisible();
     await expect(peerC.page.locator('canvas')).toBeVisible();
@@ -132,7 +135,7 @@ test('uses compact mobile scoreboard and confirms leaving during game play', asy
 
     await joinRoomFromList(peerB.page, roomId);
     await expect(peerA.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
-    await peerA.page.locator('[data-start-game]').click();
+    await readyPlayers(peerA.page, peerB.page);
     await expect(peerA.page.locator('canvas')).toBeVisible();
     const playAreaLayout = await peerA.page.evaluate(() => {
       const actionBar = document.querySelector('.action-bar')?.getBoundingClientRect();
@@ -324,7 +327,7 @@ test('resumes a disconnected player with a re-join code', async ({ browser }, te
 
     await joinRoomFromList(peerB.page, roomId);
     await expect(peerA.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
-    await peerA.page.locator('[data-start-game]').click();
+    await readyPlayers(peerA.page, peerB.page);
     await expect(peerB.page.locator('[data-rejoin-code]')).not.toHaveText('none');
     const rejoinCode = (await peerB.page.locator('[data-rejoin-code]').textContent())?.trim();
 
@@ -371,7 +374,7 @@ test('host silently auto-plays for a disconnected active player', async ({ brows
 
     await joinRoomFromList(peerB.page, roomId);
     await expect(peerA.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
-    await peerA.page.locator('[data-start-game]').click();
+    await readyPlayers(peerA.page, peerB.page);
     await expectActivePlayer(peerA.page, names[0]);
 
     await dragCard(peerA.page, 0);
@@ -430,6 +433,13 @@ async function joinRoomFromList(page: Page, roomId: string) {
   const room = page.locator(`[data-room-item][data-room-code="${roomId}"]`);
   await expect(room).toBeVisible({ timeout: 10000 });
   await room.click();
+}
+
+async function readyPlayers(...pages: Page[]) {
+  for (const page of pages) {
+    await expect(page.locator('[data-ready-toggle]')).toBeVisible({ timeout: 15000 });
+    await page.locator('[data-ready-toggle]').click();
+  }
 }
 
 async function expectActivePlayer(page: Page, expectedName: string) {

@@ -213,6 +213,7 @@ room status:
 
 - `waiting_for_start`: room はゲーム開始待ちで、player として参加できる
 - `playing`: room はゲーム進行中です。round result / game result 表示中も `playing` として扱い、途中参加者は spectator になる
+- 最終 `game_result` の確認 gate が完了したら、host は room status を `waiting_for_start` に戻す
 - `closed` は持たない。参加 peer が0人になった room は signaling server が自動削除し、room list から消える
 
 ### 鍵なし room
@@ -465,9 +466,11 @@ interface P2PEnvelope<TPayload> {
 type P2PGamePayload =
   | HostHello
   | PeerReady
+  | ReadyGateState
   | PlayerCommand
   | CommandRejected
   | EventCommitted
+  | RoomPhaseChanged
   | StateSnapshot
   | StateHashReport
   | Heartbeat
@@ -512,6 +515,30 @@ interface PeerReady {
 }
 ```
 
+### ReadyGateState
+
+host が開始待ちまたは結果確認画面の ready 状態を同期します。
+これは snapshot 適用後の `PeerReady` とは別物です。
+
+```ts
+type ReadyGateKind = 'waiting_room' | 'round_result' | 'game_result';
+
+interface ReadyGateState {
+  type: 'ready_gate_state';
+  gate: ReadyGateKind;
+  readyPlayerIds: PlayerId[];
+  requiredPlayerIds: PlayerId[];
+}
+```
+
+ルール:
+
+- ready gate の対象は online player だけで、spectator と disconnected / closed peer は含めない
+- `waiting_room` gate は「準備完了 / 準備中に戻る」を同期する
+- `round_result` gate は「次のラウンドへ / もう少し結果確認する」を同期する
+- `game_result` gate は「開始待ちへ戻る / もう少し結果確認する」を同期する
+- host は全 `requiredPlayerIds` が ready になった時点で次状態を確定する
+
 ### PlayerCommand
 
 プレイヤー入力は、非ホストからホストへ送ります。
@@ -524,8 +551,7 @@ type PlayerCommand =
       commandId: string;
       playerId: PlayerId;
       command:
-        | { type: 'set_ready'; ready: boolean }
-        | { type: 'start_game' }
+        | { type: 'set_ready'; gate: ReadyGateKind; ready: boolean }
         | { type: 'play_card'; cardId: string; target: MoveTarget }
         | { type: 'request_rematch' }
         | { type: 'leave_game' };
@@ -588,6 +614,20 @@ interface SpectatorGameEvent {
 - 最適化する場合は、通常は event のみ、5 event ごとまたはラウンド境界で snapshot を付ける
 - peer は `eventSeq` が連続していない場合、即座に `resync_request` を送る
 - spectator peer に送る `event_committed` は `SpectatorGameEvent` または `SpectatorGameSnapshot` に redaction し、hidden information を含む `GameEvent` をそのまま送らない
+
+### RoomPhaseChanged
+
+最終結果確認 gate の完了後、host は room を開始待ちに戻したことを peer に通知します。
+
+```ts
+interface RoomPhaseChanged {
+  type: 'room_phase_changed';
+  roomStatus: 'waiting_for_start';
+  hostPeerId: PeerId;
+}
+```
+
+peer はこの message を受けたら、保持している active game snapshot を破棄し、`waiting_room` UI に戻ります。
 
 ### StateSnapshot
 
@@ -947,7 +987,7 @@ spectator の制約:
 - `PlayerId` は割り当てず、`playerId: null` とする
 - 席順、手札、得点、手番には参加しない
 - `privateStateByPlayerId`, `hostOnlyStateReplica`, event log tail は受け取らない
-- `play_card`, `set_ready`, `start_game` などの player command は送れない
+- `play_card`, `set_ready` などの player command は送れない
 - host election の候補にしない
 - quorum の分母にも投票にも含めない
 - 次のゲームを同じ room で開始する場合、host が許可すれば player として参加できる
