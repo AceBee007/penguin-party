@@ -3,6 +3,7 @@ import { BrandTitle } from './components/BrandTitle';
 import { MultiplayerGame } from './components/MultiplayerGame';
 import { PixiDragStage } from './components/PixiDragStage';
 import {
+  buildStateHash,
   CARD_COLOR_LABELS,
   createLocalGame,
   getActivePlayer,
@@ -27,7 +28,7 @@ export function App() {
 }
 
 function LocalGame() {
-  const [game, setGame] = useState(() => createLocalGame({ playerCount: 2, seed: 'goal-1-local' }));
+  const [game, setGame] = useState(createInitialLocalGame);
   const [message, setMessage] = useState('Drag a card to a highlighted pyramid slot.');
   const activePlayer = getActivePlayer(game);
   const activePlayerId = activePlayer?.playerId ?? null;
@@ -36,6 +37,7 @@ function LocalGame() {
     [activePlayerId, game],
   );
   const activeRoundPlayer = activePlayerId ? getCurrentRoundPlayer(game, activePlayerId) : null;
+  const localHandPlayerId = activePlayerId ?? game.seatingOrder[0] ?? null;
   const standings = getFinalStandings(game);
 
   const handlePlayCard = useCallback(
@@ -143,6 +145,7 @@ function LocalGame() {
             <PixiDragStage
               activePlayerId={activePlayerId}
               game={game}
+              handPlayerId={localHandPlayerId}
               legalMoves={legalMoves}
               onPlayCard={handlePlayCard}
             />
@@ -199,6 +202,62 @@ function LocalGame() {
       </section>
     </main>
   );
+}
+
+function createInitialLocalGame() {
+  const params = new URLSearchParams(window.location.search);
+  const game = createLocalGame({ playerCount: 2, seed: params.get('seed') ?? 'goal-1-local' });
+
+  if (params.get('state') === 'round-complete-hand') {
+    return createRoundCompleteHandPreview(game);
+  }
+
+  return game;
+}
+
+function createRoundCompleteHandPreview(game: ReturnType<typeof createLocalGame>) {
+  const round = game.currentRound;
+
+  if (!round) {
+    return game;
+  }
+
+  const endedPlayers = Object.fromEntries(
+    Object.entries(round.players).map(([playerId, player], index) => {
+      const handCardIds = player.handCardIds.slice(0, index === 0 ? 5 : 3);
+
+      return [
+        playerId,
+        {
+          ...player,
+          blockedAtTurn: round.turnNumber,
+          handCardIds,
+          remainingCardCount: handCardIds.length,
+          roundPenaltyDelta: handCardIds.length,
+          status: 'blocked' as const,
+        },
+      ];
+    }),
+  );
+  const endedRound = {
+    ...round,
+    activePlayerId: null,
+    eliminatedPlayerIds: round.playerOrder,
+    endedReason: 'all_players_resolved' as const,
+    players: endedPlayers,
+    status: 'ended' as const,
+  };
+  const nextGame = {
+    ...game,
+    currentRound: endedRound,
+    revision: game.revision + 1,
+    status: 'round_result' as const,
+  };
+
+  return {
+    ...nextGame,
+    stateHash: buildStateHash(nextGame),
+  };
 }
 
 function formatPenaltyDelta(penaltyDelta: number): string {

@@ -344,8 +344,8 @@ function drawHand(
 ): StageDebugCard[] {
   const round = game.currentRound;
 
-  if (!round || !handPlayerId || game.status !== 'round_active') {
-    drawCenteredLabel(handLayer, 'Round complete', boardLayout.originX, boardLayout.baseY + boardLayout.cardHeight * 2.2);
+  if (!round || !handPlayerId) {
+    drawCenteredLabel(handLayer, 'Round Complete', boardLayout.originX, getHandStatusLabelY(boardLayout));
     return [];
   }
 
@@ -355,17 +355,55 @@ function drawHand(
     return [];
   }
 
+  if (game.status !== 'round_active') {
+    const handCards = drawHandCards(
+      handLayer,
+      dragLayer,
+      boardLayout,
+      game,
+      player.handCardIds,
+      false,
+      legalMoves,
+      onStartDrag,
+    );
+
+    drawCenteredLabel(handLayer, 'Round Complete', boardLayout.originX, getHandStatusLabelY(boardLayout));
+    return handCards;
+  }
+
   if (player.handCardIds.length === 0) {
     drawCenteredLabel(handLayer, 'No cards', boardLayout.originX, boardLayout.baseY + boardLayout.cardHeight * 2.2);
     return [];
   }
 
-  const maxCards = player.handCardIds.length;
+  return drawHandCards(
+    handLayer,
+    dragLayer,
+    boardLayout,
+    game,
+    player.handCardIds,
+    canPlay,
+    legalMoves,
+    onStartDrag,
+  );
+}
+
+function drawHandCards(
+  handLayer: Container,
+  dragLayer: Container,
+  boardLayout: BoardLayout,
+  game: GameSessionState,
+  handCardIds: CardId[],
+  canPlay: boolean,
+  legalMoves: LegalMove[],
+  onStartDrag: (dragState: DragState) => void,
+): StageDebugCard[] {
+  const maxCards = handCardIds.length;
   const handY = boardLayout.baseY + boardLayout.cardHeight * HAND_Y_OFFSET_RATIO;
   const cardLayouts = getHandCardLayouts(boardLayout, maxCards);
   const stageDebugCards: StageDebugCard[] = [];
 
-  player.handCardIds.forEach((cardId, index) => {
+  handCardIds.forEach((cardId, index) => {
     const card = game.cardsById[cardId];
     const cardLegalMoves = canPlay ? legalMoves.filter((move) => move.cardId === cardId) : [];
     const cardLayout: CardLayout = cardLayouts[index] ?? {
@@ -427,6 +465,10 @@ function drawHand(
   });
 
   return stageDebugCards;
+}
+
+function getHandStatusLabelY(boardLayout: BoardLayout): number {
+  return boardLayout.baseY + boardLayout.cardHeight * (HAND_Y_OFFSET_RATIO - 0.82);
 }
 
 function writeStageDebug(

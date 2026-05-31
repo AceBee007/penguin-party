@@ -105,6 +105,34 @@ test('wraps the local hand inside a narrow smartphone Pixi viewport', async ({ p
   expect(failedRequests).toEqual([]);
 });
 
+test('keeps remaining hand cards visible on the round complete screen', async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const failedRequests: string[] = [];
+
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  page.on('requestfailed', (request) => {
+    failedRequests.push(`${request.method()} ${request.url()}`);
+  });
+
+  await page.goto('/?mode=local-test&state=round-complete-hand');
+  await expect(page.locator('canvas')).toBeVisible();
+  await expect(page.locator('[data-round-status]')).toContainText('round result');
+  const debug = await getRoundCompleteHandDebug(page);
+
+  expect(debug.handCards.length).toBeGreaterThan(0);
+  expect(debug.handLayerChildren).toBe(debug.handCards.length + 1);
+  for (const card of debug.handCards) {
+    expect(card.targets).toHaveLength(0);
+  }
+
+  expect(consoleErrors).toEqual([]);
+  expect(failedRequests).toEqual([]);
+});
+
 async function getFirstLegalDrag(page: Page) {
   return page.evaluate(() => {
     const debug = window.__PENGUIN_STAGE_DEBUG__ as
@@ -171,6 +199,22 @@ async function getStageCounts(page: Page) {
       handCards: debug?.handCards.length ?? -1,
       handLayerChildren: debug?.handLayerChildren ?? -1,
       dragLayerChildren: debug?.dragLayerChildren ?? -1,
+    };
+  });
+}
+
+async function getRoundCompleteHandDebug(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_STAGE_DEBUG__ as
+      | {
+          handCards: Array<{ targets: unknown[] }>;
+          handLayerChildren: number;
+        }
+      | undefined;
+
+    return {
+      handCards: debug?.handCards ?? [],
+      handLayerChildren: debug?.handLayerChildren ?? -1,
     };
   });
 }
