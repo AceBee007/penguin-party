@@ -371,17 +371,20 @@ test('resumes a disconnected player with a re-join code', async ({ browser }, te
     await readyPlayers(peerA.page, peerB.page);
     await expect(peerB.page.locator('[data-rejoin-code]')).not.toHaveText('none');
     const rejoinCode = (await peerB.page.locator('[data-rejoin-code]').textContent())?.trim();
+    const rejoinUrl = peerB.page.url();
 
-    if (!rejoinCode) {
+    if (!rejoinCode || !new URL(rejoinUrl).searchParams.get('rejoin')) {
       throw new Error('Peer B did not receive a re-join code.');
     }
 
+    await peerBResume.page.goto(rejoinUrl);
+    await expect(peerBResume.page.locator('[data-game-message]')).toContainText('このrejoin codeは無効', {
+      timeout: 15000,
+    });
+    await expect(peerBResume.page.locator('[data-room-list]')).toHaveCount(0);
+
     await peerB.context.close();
-    await peerBResume.page.goto('/');
-    await peerBResume.page.locator('[data-player-name]').fill('IgnoredName');
-    await peerBResume.page.locator('[data-rejoin-code-input]').fill(rejoinCode);
-    await connectSignalingServer(peerBResume.page);
-    await peerBResume.page.getByRole('button', { name: 'Start' }).click();
+    await peerBResume.page.goto(rejoinUrl);
 
     await expect.poll(() => getLocalPlayerName(peerBResume.page), { timeout: 15000 }).toBe(names[1]);
     await expect.poll(() => getStateHash(peerBResume.page), { timeout: 30000 }).not.toBe('none');

@@ -5,6 +5,7 @@ import type {
   JoinRoomResponse,
   NetworkIdentity,
   PlayerNameReservation,
+  RequestRejoinCodeResponse,
   ResumeGameRequest,
   ResumeGameResponse,
   RoomStatus,
@@ -14,6 +15,7 @@ import type {
 } from './types';
 
 const SIGNALING_SERVER_QUERY_PARAM = 'signaling-server';
+const REJOIN_QUERY_PARAM = 'rejoin';
 const LEGACY_SIGNALING_SERVER_QUERY_PARAM = 'signal';
 const FALLBACK_SIGNALING_HOST = '127.0.0.1';
 const DEFAULT_SIGNALING_PORT = 15201;
@@ -74,6 +76,34 @@ export function setSignalingServerQuery(httpUrl: string): void {
   const pageUrl = new URL(window.location.href);
   pageUrl.searchParams.set(SIGNALING_SERVER_QUERY_PARAM, normalizeSignalingHttpUrl(httpUrl));
   pageUrl.searchParams.delete(LEGACY_SIGNALING_SERVER_QUERY_PARAM);
+  window.history.replaceState(window.history.state, '', `${pageUrl.pathname}${pageUrl.search}${pageUrl.hash}`);
+}
+
+export function getRejoinCodeQuery(): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  return new URLSearchParams(window.location.search).get(REJOIN_QUERY_PARAM)?.trim() || null;
+}
+
+export function setRejoinCodeQuery(rejoinCode: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const pageUrl = new URL(window.location.href);
+  pageUrl.searchParams.set(REJOIN_QUERY_PARAM, rejoinCode);
+  window.history.replaceState(window.history.state, '', `${pageUrl.pathname}${pageUrl.search}${pageUrl.hash}`);
+}
+
+export function clearRejoinCodeQuery(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const pageUrl = new URL(window.location.href);
+  pageUrl.searchParams.delete(REJOIN_QUERY_PARAM);
   window.history.replaceState(window.history.state, '', `${pageUrl.pathname}${pageUrl.search}${pageUrl.hash}`);
 }
 
@@ -170,6 +200,27 @@ export async function resumeGame(request: ResumeGameRequest, httpUrl = getSignal
     joinedAt: payload.joinedAt,
     displayName: payload.displayName,
   };
+}
+
+export async function requestGameRejoinCode(
+  identity: Pick<NetworkIdentity, 'peerId' | 'signalingToken'> & { room: Pick<NetworkIdentity['room'], 'roomId'> },
+  httpUrl = getSignalingHttpUrl(),
+): Promise<RequestRejoinCodeResponse> {
+  const response = await fetch(`${httpUrl}/rooms/${identity.room.roomId}/rejoin-code`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ peerId: identity.peerId, signalingToken: identity.signalingToken }),
+  });
+  const payload = (await response.json()) as RequestRejoinCodeResponse | { code: string; message: string };
+
+  if (!response.ok || 'code' in payload) {
+    throw new JoinRoomFailure(
+      'code' in payload ? payload.code : 'rejoin_code_failed',
+      'message' in payload ? payload.message : `Rejoin code request failed: ${response.status}`,
+    );
+  }
+
+  return payload;
 }
 
 export async function joinRoom(

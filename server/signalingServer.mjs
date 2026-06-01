@@ -244,7 +244,7 @@ async function routeHttp(request, response) {
       peerId: peer.peerId,
       playerId: peer.playerId,
       reconnectToken: peer.reconnectToken,
-      rejoinCode: peer.rejoinCode,
+      rejoinCode: peer.rejoinCode ?? undefined,
       signalingToken: peer.signalingToken,
       existingPeers: [],
       role: peer.role,
@@ -309,10 +309,34 @@ async function routeHttp(request, response) {
       peerId: peer.peerId,
       playerId: peer.playerId,
       reconnectToken: peer.reconnectToken,
-      rejoinCode: peer.rejoinCode,
+      rejoinCode: peer.rejoinCode ?? undefined,
       signalingToken: peer.signalingToken,
       existingPeers,
       role,
+    });
+    return;
+  }
+
+  const rejoinCodeMatch = /^\/rooms\/([^/]+)\/rejoin-code$/.exec(url.pathname);
+
+  if (request.method === 'POST' && rejoinCodeMatch) {
+    const room = rooms.get(rejoinCodeMatch[1]);
+    const body = await readJsonBody(request);
+    const peerId = String(body.peerId ?? '').trim();
+    const signalingToken = String(body.signalingToken ?? '').trim();
+    const peer = room?.peers.get(peerId);
+
+    if (!room || !peer || peer.signalingToken !== signalingToken || room.status !== 'playing' || peer.role === 'spectator') {
+      writeJoinError(response, { code: 'invalid_rejoin_code', message: 'このrejoin codeは無効' });
+      return;
+    }
+
+    issueGameRejoinCode(peer);
+    room.updatedAt = Date.now();
+
+    writeJson(response, 200, {
+      rejoinCode: peer.rejoinCode,
+      expiresAt: peer.rejoinCodeExpiresAt,
     });
     return;
   }
@@ -323,26 +347,33 @@ async function routeHttp(request, response) {
     const match = findPeerByRejoinCode(rejoinCode);
 
     if (!match) {
-      writeJoinError(response, { code: 'invalid_rejoin_code', message: 'Invalid re-join code.' });
+      writeJoinError(response, { code: 'invalid_rejoin_code', message: 'このrejoin codeは無効' });
       return;
     }
 
     const { room, peer } = match;
 
-    if (peer.rejoinCodeExpiresAt < Date.now()) {
-      writeJoinError(response, { code: 'expired_rejoin_code', message: 'Re-join code has expired.' });
+    if (!peer.rejoinCode || !peer.rejoinCodeExpiresAt || peer.rejoinCodeExpiresAt < Date.now()) {
+      clearPeerRejoinCode(peer);
+      writeJoinError(response, { code: 'invalid_rejoin_code', message: 'このrejoin codeは無効' });
       return;
     }
 
     if (room.status !== 'playing') {
-      writeJoinError(response, { code: 'game_already_finished', message: 'This game cannot be resumed.' });
+      writeJoinError(response, { code: 'invalid_rejoin_code', message: 'このrejoin codeは無効' });
       return;
     }
 
     const oldSocket = socketsByPeerId.get(peer.peerId);
 
     if (oldSocket?.readyState === WebSocket.OPEN) {
-      oldSocket.close();
+      writeJoinError(response, { code: 'invalid_rejoin_code', message: 'このrejoin codeは無効' });
+      return;
+    }
+
+    if (peer.connectionStatus !== 'disconnected') {
+      writeJoinError(response, { code: 'invalid_rejoin_code', message: 'このrejoin codeは無効' });
+      return;
     }
 
     peer.signalingToken = createId('signal');
@@ -356,7 +387,7 @@ async function routeHttp(request, response) {
       peerId: peer.peerId,
       playerId: peer.playerId,
       reconnectToken: peer.reconnectToken,
-      rejoinCode: peer.rejoinCode,
+      rejoinCode: peer.rejoinCode ?? undefined,
       signalingToken: peer.signalingToken,
       existingPeers: [...room.peers.values()].map(toPeerSummary).filter((candidate) => candidate.peerId !== peer.peerId),
       role: peer.role,
@@ -375,6 +406,14 @@ async function routeHttp(request, response) {
     if (!room) {
       writeJson(response, 404, { code: 'room_closed', message: 'Room is no longer available.' });
       return;
+    }
+
+    if (body.status === 'playing') {
+      invalidateRoomRejoinCodes(room);
+    }
+
+    if (body.status === 'waiting_for_start') {
+      invalidateRoomRejoinCodes(room);
     }
 
     if (body.status === 'waiting_for_start' || body.status === 'playing') {
@@ -396,8 +435,6 @@ function writeJoinError(response, payload) {
 }
 
 function createPeer({ displayName, joinedAt, peerId, playerId, role }) {
-  const rejoinCode = createRejoinCode();
-
   return {
     peerId,
     playerId,
@@ -405,8 +442,8 @@ function createPeer({ displayName, joinedAt, peerId, playerId, role }) {
     joinedAt,
     role,
     reconnectToken: createId('reconnect'),
-    rejoinCode,
-    rejoinCodeExpiresAt: joinedAt + REJOIN_TTL_MS,
+    rejoinCode: null,
+    rejoinCodeExpiresAt: null,
     signalingToken: createId('signal'),
     connectionStatus: 'new',
     wsConnectedAt: null,
@@ -437,17 +474,31 @@ function handlePeerDisconnected(room, peerId) {
     return;
   }
 
-  if (room.status === 'playing' && room.hostPeerId !== peerId) {
+  if (room.status === 'playing') {
     peer.connectionStatus = 'disconnected';
     peer.wsConnectedAt = null;
     room.updatedAt = Date.now();
+
+    const wasHost = room.hostPeerId === peerId;
+
+    if (wasHost) {
+      const nextHost = [...room.peers.values()].find(
+        (candidate) => candidate.peerId !== peerId && candidate.role !== 'spectator' && candidate.connectionStatus !== 'disconnected',
+      );
+
+      if (nextHost) {
+        peer.role = peer.playerId ? 'player' : peer.role;
+        room.hostPeerId = nextHost.peerId;
+        nextHost.role = 'host';
+      }
+    }
 
     if (!hasConnectedPeer(room)) {
       rooms.delete(room.roomId);
       return;
     }
 
-    broadcastToRoom(room, peerId, { type: 'peer_disconnected', peerId });
+    broadcastToRoom(room, peerId, { type: wasHost ? 'peer_left' : 'peer_disconnected', peerId });
     return;
   }
 
@@ -540,6 +591,26 @@ function findPeerByRejoinCode(rejoinCode) {
   }
 
   return null;
+}
+
+function issueGameRejoinCode(peer) {
+  if (peer.rejoinCode && peer.rejoinCodeExpiresAt && peer.rejoinCodeExpiresAt > Date.now()) {
+    return;
+  }
+
+  peer.rejoinCode = createRejoinCode();
+  peer.rejoinCodeExpiresAt = Date.now() + REJOIN_TTL_MS;
+}
+
+function invalidateRoomRejoinCodes(room) {
+  for (const peer of room.peers.values()) {
+    clearPeerRejoinCode(peer);
+  }
+}
+
+function clearPeerRejoinCode(peer) {
+  peer.rejoinCode = null;
+  peer.rejoinCodeExpiresAt = null;
 }
 
 function toPeerSummary(peer) {

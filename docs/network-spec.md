@@ -287,6 +287,8 @@ GET  /health
 GET  /rooms
 POST /rooms
 POST /rooms/:roomId/join
+POST /rooms/:roomId/rejoin-code
+POST /rejoin
 ```
 
 ### Create room request
@@ -335,6 +337,33 @@ interface PeerSummary {
   role: PeerRole;
 }
 ```
+
+### Game re-join code request
+
+最初のラウンドへ入るタイミングで、各 player client は signaling server に game-scoped re-join code を要求します。
+
+```ts
+interface RequestRejoinCodeRequest {
+  peerId: PeerId;
+  signalingToken: string;
+}
+
+interface RequestRejoinCodeResponse {
+  rejoinCode: string;
+  expiresAt: number;
+}
+```
+
+ルール:
+
+- `RoomMetadata.status === 'playing'` の room でのみ発行する
+- spectator には発行しない
+- room が `playing` へ変わるたび、前 game の re-join code はすべて無効化し、新しい game 用 code を発行する
+- room が `waiting_for_start` へ戻るとき、全 re-join code を無効化する
+- client は発行された code を page URL の `rejoin` query に入れる
+- `rejoin` query 付き URL を開いた client は、signaling server 接続後に `POST /rejoin` を試みる
+- code に紐づく player がすでに接続中の場合、server は re-join を拒否する
+- code が存在しない、期限切れ、別 game の code、または無効化済みの場合、server は `invalid_rejoin_code` として拒否する
 
 ### WebSocket signaling messages
 

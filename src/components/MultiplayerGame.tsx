@@ -18,7 +18,9 @@ import { electNextHostPeerId } from '../network/hostElection';
 import { PeerMeshClient } from '../network/peerMesh';
 import {
   checkSignalingServer,
+  clearRejoinCodeQuery,
   createRoom,
+  getRejoinCodeQuery,
   getSignalingHttpUrl,
   getSignalingServerQueryUrl,
   JoinRoomFailure,
@@ -27,8 +29,10 @@ import {
   markRoomPlaying,
   markRoomWaitingForStart,
   normalizeSignalingHttpUrl,
+  requestGameRejoinCode,
   releasePlayerNameReservation,
   resumeGame,
+  setRejoinCodeQuery,
   setSignalingServerQuery,
   validatePlayerName,
 } from '../network/signalingClient';
@@ -54,6 +58,7 @@ const AUTO_PLAY_DISCONNECTED_MIN_MS = 5000;
 const AUTO_PLAY_DISCONNECTED_JITTER_MS = 3000;
 
 let autoSignalingConnectAttemptedUrl: string | null = null;
+let autoRejoinAttemptedKey: string | null = null;
 
 type MultiplayerScene =
   | 'landing_page'
@@ -621,6 +626,35 @@ export function MultiplayerGame() {
     trimmedRejoinCode,
   ]);
 
+  useEffect(() => {
+    const rejoinCodeFromQuery = getRejoinCodeQuery();
+
+    if (!connectedSignalingServerUrl || !rejoinCodeFromQuery) {
+      return;
+    }
+
+    const attemptKey = `${connectedSignalingServerUrl}|${rejoinCodeFromQuery}`;
+
+    if (autoRejoinAttemptedKey === attemptKey) {
+      return;
+    }
+
+    autoRejoinAttemptedKey = attemptKey;
+    setRejoinCode(rejoinCodeFromQuery);
+    void (async () => {
+      try {
+        const nextIdentity = await resumeGame({ rejoinCode: rejoinCodeFromQuery }, connectedSignalingServerUrl);
+        setPlayerName(nextIdentity.displayName);
+        setRejoinCode('');
+        setMessage(`Resumed room ${nextIdentity.room.roomId}.`);
+        setRejoinCodeQuery(rejoinCodeFromQuery);
+        startMesh(nextIdentity);
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : 'このrejoin codeは無効');
+      }
+    })();
+  }, [connectedSignalingServerUrl, startMesh]);
+
   const handleCreateRoom = useCallback(async () => {
     if (!isPlayerNameValid) {
       setMessage('Enter a player name before creating a room.');
@@ -733,6 +767,7 @@ export function MultiplayerGame() {
     gameRef.current = null;
     hostPeerIdRef.current = null;
     eventSeqRef.current = 0;
+    clearRejoinCodeQuery();
     setIdentity(null);
     setGame(null);
     setPeers([]);
@@ -1332,6 +1367,20 @@ export function MultiplayerGame() {
     const payload = envelope.payload;
 
     if (payload.type === 'host_hello') {
+      const currentIdentity = identityRef.current;
+      const playingIdentity = currentIdentity
+        ? {
+            ...currentIdentity,
+            room: { ...currentIdentity.room, status: 'playing' as const, hostPeerId: payload.currentHostPeerId },
+          }
+        : null;
+
+      if (playingIdentity) {
+        identityRef.current = playingIdentity;
+        setIdentity(playingIdentity);
+        void activateGameRejoinCode(playingIdentity);
+      }
+
       setHostPeerId(payload.currentHostPeerId);
       hostPeerIdRef.current = payload.currentHostPeerId;
       meshRef.current?.setHostPeerId(payload.currentHostPeerId);
@@ -1461,7 +1510,7 @@ export function MultiplayerGame() {
     }
 
     if (gate === 'waiting_room') {
-      startGameFromReadyGate(requiredPlayerIds);
+      void startGameFromReadyGate(requiredPlayerIds);
       return;
     }
 
@@ -1473,7 +1522,7 @@ export function MultiplayerGame() {
     returnRoomToWaitingFromReadyGate();
   }
 
-  function startGameFromReadyGate(requiredPlayerIds: PlayerId[]): void {
+  async function startGameFromReadyGate(requiredPlayerIds: PlayerId[]): Promise<void> {
     const currentIdentity = identityRef.current;
 
     if (!currentIdentity || currentIdentity.peerId !== hostPeerIdRef.current) {
@@ -1498,13 +1547,21 @@ export function MultiplayerGame() {
     eventSeqRef.current = 0;
     gameRef.current = snapshot;
     setGame(snapshot);
-    void markRoomPlaying(currentIdentity.room.roomId, connectedSignalingServerUrl ?? undefined);
-    const playingIdentity = {
+
+    try {
+      await markRoomPlaying(currentIdentity.room.roomId, connectedSignalingServerUrl ?? undefined);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not mark room as playing.');
+      return;
+    }
+
+    let playingIdentity: NetworkIdentity = {
       ...currentIdentity,
       room: { ...currentIdentity.room, status: 'playing' as const },
     };
     identityRef.current = playingIdentity;
     setIdentity(playingIdentity);
+    playingIdentity = await activateGameRejoinCode(playingIdentity);
     setScene('game_play');
     setMessage(`Started ${playerPeers.length}-player game.`);
 
@@ -1526,6 +1583,32 @@ export function MultiplayerGame() {
     clearReadyGateState();
     commitHostResolvedState(nextGame);
     setScene('game_play');
+  }
+
+  async function activateGameRejoinCode(currentIdentity: NetworkIdentity): Promise<NetworkIdentity> {
+    if (!connectedSignalingServerUrl || !currentIdentity.playerId || currentIdentity.role === 'spectator') {
+      return currentIdentity;
+    }
+
+    try {
+      const { rejoinCode: nextRejoinCode } = await requestGameRejoinCode(currentIdentity, connectedSignalingServerUrl);
+
+      if (identityRef.current?.peerId !== currentIdentity.peerId) {
+        return currentIdentity;
+      }
+
+      const nextIdentity = {
+        ...identityRef.current,
+        rejoinCode: nextRejoinCode,
+      };
+      identityRef.current = nextIdentity;
+      setIdentity(nextIdentity);
+      setRejoinCodeQuery(nextRejoinCode);
+      return nextIdentity;
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not issue rejoin code.');
+      return currentIdentity;
+    }
   }
 
   function returnRoomToWaitingFromReadyGate(): void {
@@ -1555,6 +1638,7 @@ export function MultiplayerGame() {
 
     const waitingIdentity: NetworkIdentity = {
       ...currentIdentity,
+      rejoinCode: undefined,
       room: {
         ...currentIdentity.room,
         hostPeerId: nextHostPeerId,
@@ -1565,6 +1649,7 @@ export function MultiplayerGame() {
     gameRef.current = null;
     hostPeerIdRef.current = nextHostPeerId;
     meshRef.current?.setHostPeerId(nextHostPeerId);
+    clearRejoinCodeQuery();
     setIdentity(waitingIdentity);
     setGame(null);
     setHostPeerId(nextHostPeerId);

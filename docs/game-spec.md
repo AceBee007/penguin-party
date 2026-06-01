@@ -266,8 +266,8 @@ re-join code で復帰する場合は例外です。
 
 ### Re-join code
 
-player が room / game に参加した時点で、server はランダムな re-join code を自動生成します。
-re-join code は player identity に紐づく secret であり、通常 UI では他 player に見せません。
+player が最初のラウンドに入る時点で、client は signaling server にその game 用の re-join code を要求します。
+re-join code は player identity と game に紐づく secret であり、通常 UI では他 player に見せません。
 有効期限は生成から3時間です。
 
 ```ts
@@ -285,7 +285,8 @@ interface RejoinIdentity {
 
 re-join code が有効で、対象 game が進行中または復帰可能な状態なら、同じ `playerId`、`displayName`、seat、private hand を再割り当てして resume します。
 re-join code で復帰する場合、landing page で入力された player name は使いません。
-期限切れ、存在しない、または終了済み game の re-join code は拒否します。
+期限切れ、存在しない、終了済み game、waiting room に戻った game、またはすでに接続中の player の re-join code は拒否します。
+同じ room で次の game を開始する場合、前 game の code は無効化し、新しい code を発行します。
 
 ## 6. カードデータ
 

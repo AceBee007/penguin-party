@@ -193,6 +193,20 @@ interface RejoinCodeInputView {
 - resume 成功後、UI 上の player name は server が返した以前の display name に置き換える
 - re-join code は secret なので、他 player の画面、room list、waiting room、game play には表示しない
 
+### Re-join URL query
+
+ゲーム開始時、各 player は signaling server からその game 用の re-join code を受け取り、現在の URL に `rejoin` query として追加します。
+
+表示・遷移ルール:
+
+- `rejoin` query は最初のラウンドへ入った時点で追加する
+- `waiting_room` / `waiting_for_start` に戻った時点で、client は `rejoin` query を URL から削除する
+- `rejoin` query 付き URL で Landing page を開いた場合、signaling server 接続後に自動で resume を試みる
+- resume 成功時は Landing page / matchmaking lobby を経由せず、該当 player として進行中 game へ直接復帰する
+- re-join code に紐づく player がすでに接続中の場合、Landing page に `このrejoin codeは無効` と表示する
+- re-join code が server side で無効化済み、期限切れ、存在しない場合も、Landing page に `このrejoin codeは無効` と表示する
+- 同じ room が次の game を始める場合、前 game の re-join code は使わず、新しい code を発行し直す
+
 ## 5. Matchmaking Lobby
 
 ### 目的
