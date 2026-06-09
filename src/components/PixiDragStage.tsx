@@ -7,8 +7,9 @@ import {
   Rectangle,
   Text,
 } from 'pixi.js';
-import { CARD_COLOR_LABELS, getCurrentRoundPlayer, sameTarget } from '../game/rules';
+import { getCurrentRoundPlayer, sameTarget } from '../game/rules';
 import type { CardColor, CardId, GameSessionState, LegalMove, MoveTarget, PlayerId } from '../game/types';
+import { cardColorLabel, t } from '../i18n/uiText';
 import {
   HAND_ROW_SPACING_RATIO,
   HAND_Y_OFFSET_RATIO,
@@ -18,6 +19,7 @@ import {
   getBoardVisualBounds,
   getVisualBoardX,
 } from './boardGeometry';
+import { useSelectedLocale } from './LanguageSelector';
 
 type BoardFitMode = 'dynamic' | 'perfect-pyramid';
 
@@ -104,6 +106,7 @@ export function PixiDragStage({
   showHand = true,
   onPlayCard,
 }: PixiDragStageProps) {
+  const locale = useSelectedLocale();
   const mountRef = useRef<HTMLDivElement | null>(null);
   const legalMoveKey = useMemo(() => serializeLegalMoves(legalMoves), [legalMoves]);
   const resolvedHandPlayerId = showHand ? handPlayerId ?? activePlayerId : null;
@@ -145,7 +148,7 @@ export function PixiDragStage({
         app = null;
       }
     };
-  }, [canPlay, debugId, fitMode, game, legalMoveKey, legalMoves, onPlayCard, resolvedHandPlayerId, showHand]);
+  }, [canPlay, debugId, fitMode, game, legalMoveKey, legalMoves, locale, onPlayCard, resolvedHandPlayerId, showHand]);
 
   return <div className="pixi-root" data-pixi-root ref={mountRef} />;
 }
@@ -176,7 +179,7 @@ async function startPixiGameStage(
     return app;
   }
 
-  app.canvas.setAttribute('aria-label', 'Penguin Party game board');
+  app.canvas.setAttribute('aria-label', t('aria.gameBoard'));
   mount.appendChild(app.canvas);
 
   const background = new Graphics();
@@ -303,7 +306,7 @@ function drawBoard(layer: Container, layout: BoardLayout, game: GameSessionState
     const cardLayout = getCardLayoutForTarget(layout, card);
     const container = createCardContainer(
       card.color,
-      CARD_COLOR_LABELS[card.color],
+      cardColorLabel(card.color),
       ownerInitial(game, card.ownerPlayerId),
       cardLayout,
       1,
@@ -345,7 +348,7 @@ function drawHand(
   const round = game.currentRound;
 
   if (!round || !handPlayerId) {
-    drawCenteredLabel(handLayer, 'Round Complete', boardLayout.originX, getHandStatusLabelY(boardLayout));
+    drawCenteredLabel(handLayer, t('waiting.roundComplete'), boardLayout.originX, getHandStatusLabelY(boardLayout));
     return [];
   }
 
@@ -367,12 +370,12 @@ function drawHand(
       onStartDrag,
     );
 
-    drawCenteredLabel(handLayer, 'Round Complete', boardLayout.originX, getHandStatusLabelY(boardLayout));
+    drawCenteredLabel(handLayer, t('waiting.roundComplete'), boardLayout.originX, getHandStatusLabelY(boardLayout));
     return handCards;
   }
 
   if (player.handCardIds.length === 0) {
-    drawCenteredLabel(handLayer, 'No cards', boardLayout.originX, boardLayout.baseY + boardLayout.cardHeight * 2.2);
+    drawCenteredLabel(handLayer, t('waiting.noCards'), boardLayout.originX, boardLayout.baseY + boardLayout.cardHeight * 2.2);
     return [];
   }
 
@@ -430,7 +433,7 @@ function drawHandCards(
     });
     const container = createCardContainer(
       card.color,
-      CARD_COLOR_LABELS[card.color],
+      cardColorLabel(card.color),
       `${card.serial}`,
       cardLayout,
       cardLegalMoves.length > 0 ? 1 : 0.42,
@@ -663,7 +666,7 @@ function findNearestTarget(
 
 function ownerInitial(game: GameSessionState, playerId: PlayerId): string {
   if (playerId === 'initial-board') {
-    return 'B';
+    return t('card.initialBoardFooter');
   }
 
   const player = game.players.find((candidate) => candidate.playerId === playerId);

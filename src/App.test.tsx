@@ -26,6 +26,7 @@ vi.mock('./components/PixiDragStage', () => ({
 describe('App', () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
+    document.cookie = 'prefered-language=; Max-Age=0; Path=/';
     window.history.replaceState({}, '', '/');
   });
 
@@ -45,7 +46,7 @@ describe('App', () => {
     expect((screen.getByLabelText('Player name') as HTMLInputElement).value).toMatch(/^Player_[0-9a-f]{6}$/);
     expect(screen.getByLabelText('Signaling server')).toHaveValue(`http://${window.location.hostname}:15201`);
     expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '接続' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
   });
 
   it('auto-connects once with the signaling server query', async () => {
@@ -63,6 +64,39 @@ describe('App', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://10.0.0.8:15201/rooms');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled());
     expect(screen.getByText('Connected: http://10.0.0.8:15201')).toBeInTheDocument();
+  });
+
+  it('uses the lang query before cookies for the landing page language', () => {
+    document.cookie = 'prefered-language=en; Path=/';
+    window.history.replaceState({}, '', '/?lang=ja');
+
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: 'ペンギンパーティー' })).toBeInTheDocument();
+    expect(screen.getByLabelText('言語')).toHaveValue('ja');
+    expect(screen.getByRole('button', { name: '接続' })).toBeEnabled();
+  });
+
+  it('stores manual language selection in the cookie and removes lang from the URL', () => {
+    window.history.replaceState({}, '', '/?lang=ja&signaling-server=http%3A%2F%2F10.0.0.8%3A15201');
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText('言語'), { target: { value: 'en' } });
+
+    expect(document.cookie).toContain('prefered-language=en');
+    expect(new URL(window.location.href).searchParams.get('lang')).toBeNull();
+    expect(new URL(window.location.href).searchParams.get('signaling-server')).toBe('http://10.0.0.8:15201');
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
+  });
+
+  it('uses the language cookie when lang query is absent', () => {
+    document.cookie = 'prefered-language=ja; Path=/';
+
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: 'ペンギンパーティー' })).toBeInTheDocument();
+    expect(screen.getByLabelText('言語')).toHaveValue('ja');
   });
 
   it('renders the local verification game shell for local-test mode', () => {

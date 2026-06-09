@@ -1,0 +1,241 @@
+{
+  "app": {
+    "title": "ペンギンパーティー"
+  },
+  "aria": {
+    "activePlayer": "手番のプレイヤー",
+    "connectionLocalGood": "ローカル接続は良好",
+    "expandedScoreboard": "展開されたスコアボード",
+    "gameBoard": "ペンギンパーティーのゲーム盤",
+    "landingPage": "開始画面",
+    "localGame": "ペンギンパーティーのローカルゲーム",
+    "maximizedBoard": "最大化されたゲーム盤",
+    "p2pDetails": "ピア間通信の詳細",
+    "p2pGame": "ペンギンパーティーのピア間通信ゲーム",
+    "p2pStatus": "ピア間通信ステータス {status}",
+    "passwordRequired": "パスワードが必要",
+    "peers": "ピア",
+    "player": "プレイヤー",
+    "players": "プレイヤー",
+    "roundDetails": "ラウンド詳細",
+    "scoreboardCollapse": "スコアボードを閉じる",
+    "scoreboardExpand": "スコアボードを開く",
+    "you": "{displayName} あなた"
+  },
+  "button": {
+    "back": "戻る",
+    "connect": "接続",
+    "createGameRoom": "新しいゲームルームを作成",
+    "createRoom": "ルームを作成",
+    "joinRoom": "ルームに参加",
+    "leave": "退出",
+    "newLocalGame": "新しいローカルゲーム",
+    "nextRound": "次のラウンド",
+    "refresh": "更新",
+    "resolveNoMoves": "手なしを解決",
+    "restoreBoard": "盤面を戻す",
+    "maximizeBoard": "盤面を最大化",
+    "start": "開始",
+    "stay": "残る"
+  },
+  "card": {
+    "initialBoardFooter": "場",
+    "color": {
+      "blue": "青",
+      "green": "緑",
+      "purple": "紫",
+      "red": "赤",
+      "yellow": "黄"
+    }
+  },
+  "common": {
+    "cards": "{count}枚",
+    "fraction": "{current} / {total}",
+    "none": "なし",
+    "points": "{count}点",
+    "rankedName": "{rank}位 {displayName}",
+    "roundOfTotal": "ラウンド {round} / {total}",
+    "slash": " / "
+  },
+  "connection": {
+    "local": "ローカル"
+  },
+  "dialog": {
+    "createRoomTitle": "ルームを作成",
+    "joinPasswordTitle": "ルームのパスワード",
+    "leaveRoomBody": "このルームを退出してマッチメイキングに戻ります。",
+    "leaveRoomTitle": "ゲームを退出しますか？"
+  },
+  "field": {
+    "language": "言語",
+    "password": "パスワード",
+    "playerName": "プレイヤー名",
+    "rejoinCode": "再参加コード",
+    "roomName": "ルーム名",
+    "signalingServer": "シグナリングサーバー"
+  },
+  "gameStatus": {
+    "game_result": "ゲーム結果",
+    "round_active": "ラウンド進行中",
+    "round_result": "ラウンド結果"
+  },
+  "local": {
+    "mode": "ローカル検証モード"
+  },
+  "message": {
+    "cardPlayed": "{displayName} が {color} を出しました。",
+    "commandRejected": "コマンドが拒否されました: {reason}",
+    "committedEvent": "イベント {eventSeq} を確定しました。リビジョン {revision}。",
+    "connectBeforeCreate": "ルームを作成する前にシグナリングサーバーへ接続してください。",
+    "connectBeforeJoin": "ルームへ参加する前にシグナリングサーバーへ接続してください。",
+    "connectBeforeLoadingRooms": "ルームを読み込む前にシグナリングサーバーへ接続してください。",
+    "connectBeforeRefreshName": "プレイヤー名を更新する前にシグナリングサーバーへ接続してください。",
+    "connectBeforeStart": "開始する前にシグナリングサーバーへ接続してください。",
+    "connectedSignaling": "シグナリングサーバーへ接続しました。",
+    "connectingSignaling": "シグナリングサーバーへ接続しています。",
+    "dataChannelOpen": "{displayName} とのデータチャネルが開きました。",
+    "enterNameBeforeCreate": "ルームを作成する前にプレイヤー名を入力してください。",
+    "enterNameBeforeJoin": "ルームへ参加する前にプレイヤー名を入力してください。",
+    "hostDisconnectedElected": "ホストが切断されました。代替ホストを選出しました。",
+    "hostDisconnectedNoReplacement": "ホストが切断されました。代替ホストが見つかりませんでした。",
+    "hostDisconnectedPromoted": "ホストが切断されました。このピアが新しいホストです。",
+    "initialLocal": "カードをドラッグして、ハイライトされたピラミッドの枠に置いてください。",
+    "initialMultiplayer": "開始するにはプレイヤー名を入力してください。",
+    "joinedRoom": "ルーム {roomId} に参加しました。",
+    "joinFailed": "参加に失敗しました。",
+    "loadingOpenRooms": "募集中のルームを読み込んでいます。",
+    "markRoomPlayingFailed": "ルームをプレイ中にできませんでした。",
+    "moveRejected": "手が拒否されました。",
+    "nextRoundStarted": "次のラウンドを開始しました。",
+    "noCurrentHost": "現在のホストがありません。",
+    "noLegalMoveResolved": "合法手がなかったため、このラウンドの手番プレイヤーは脱落しました。",
+    "noOpenRoomsYet": "募集中のルームはまだありません。",
+    "peerReady": "ピアの準備が完了しました。",
+    "playerNameUnavailable": "このプレイヤー名は使用できません。",
+    "receivedHostSnapshot": "ホストのスナップショットを受信しました。",
+    "rejoinCodeInvalid": "この再参加コードは無効です。",
+    "rejoinFailed": "再参加に失敗しました。",
+    "rejoinIssueFailed": "再参加コードを発行できませんでした。",
+    "resumedRoom": "ルーム {roomId} に復帰しました。",
+    "returnedToMatchmaking": "マッチメイキングロビーに戻りました。",
+    "returnedToMatchmakingRefreshingName": "マッチメイキングロビーに戻りました。プレイヤー名を更新しています。",
+    "returnedToWaitingRoom": "待機ルームに戻りました。",
+    "roomCreated": "ルーム {roomId} を作成しました。プレイヤーを待っています。",
+    "roomCreationFailed": "ルームの作成に失敗しました。",
+    "roomFull": "ルームは満員です。",
+    "roomListPrompt": "募集中のルームを選ぶか、新しいルームを作成してください。",
+    "sentPlayCardCommand": "カードを出すコマンドをホストへ送信しました。",
+    "signalingConnectionFailed": "シグナリングサーバーへの接続に失敗しました。",
+    "signalingUnavailable": "シグナリングサーバーを利用できません。npm run signaling を起動してください。",
+    "startedLocalGame": "新しいローカル検証ゲームを開始しました。",
+    "startedMultiplayerGame": "{count}人ゲームを開始しました。"
+  },
+  "metric": {
+    "board": "盤面",
+    "connected": "接続済み",
+    "hand": "手札",
+    "host": "ホスト",
+    "legal": "合法手",
+    "players": "プレイヤー",
+    "rejoin": "再参加",
+    "revision": "リビジョン",
+    "spectators": "観戦者"
+  },
+  "network": {
+    "hostRevision": "ホストのリビジョン {revision}",
+    "idle": "待機中"
+  },
+  "player": {
+    "betweenRounds": "ラウンド間",
+    "defaultName": "プレイヤー_{suffix}",
+    "local": "あなた",
+    "numbered": "プレイヤー {number}"
+  },
+  "peerConnectionStatus": {
+    "closed": "終了",
+    "connected": "接続済み",
+    "connecting": "接続中",
+    "disconnected": "切断",
+    "new": "新規",
+    "signaling": "シグナリング中"
+  },
+  "peerStatus": {
+    "preparing": "準備中",
+    "ready": "準備完了"
+  },
+  "ready": {
+    "action": {
+      "gameResult": "待機ルームへ戻る",
+      "resultReady": "もう少し結果を確認する",
+      "roundResult": "次のラウンドへ",
+      "waitingRoom": "準備完了",
+      "waitingRoomReady": "準備中に戻る"
+    },
+    "status": {
+      "resultWaiting": "結果確認中のプレイヤーを待っています（準備未完了はあと{count}名）。",
+      "waitingForPlayers": "他のプレイヤーの準備完了を待っています（準備未完了はあと{count}名）。",
+      "waitingRoomNeedsPlayers": "開始には2名以上のプレイヤーが必要です。"
+    }
+  },
+  "role": {
+    "host": "ホスト",
+    "player": "プレイヤー",
+    "spectator": "観戦者"
+  },
+  "room": {
+    "channel": {
+      "connecting": "接続中",
+      "open": "オープン"
+    },
+    "defaultName": "ペンギン卓",
+    "full": "満員",
+    "idLabel": "ルーム",
+    "listEmpty": "募集中のルームはありません",
+    "listLoading": "ルームを読み込んでいます",
+    "openRooms": "募集中のルーム",
+    "spectatorBadge": "観戦",
+    "status": {
+      "playing": "プレイ中",
+      "waiting_for_start": "開始待ち"
+    }
+  },
+  "roundEndReason": {
+    "all_hands_empty": "全員の手札がなくなりました",
+    "all_players_blocked": "全プレイヤーが脱落しました",
+    "all_players_resolved": "全プレイヤーが解決済みです"
+  },
+  "roundPlayerStatus": {
+    "active": "有効",
+    "blocked": "脱落",
+    "finished": "上がり"
+  },
+  "scene": {
+    "game_play": "ゲームプレイ",
+    "game_result": "ゲーム結果",
+    "landing_page": "開始画面",
+    "matchmaking_lobby": "マッチメイキングロビー",
+    "round_result": "ラウンド結果",
+    "waiting_room": "待機ルーム"
+  },
+  "signaling": {
+    "connected": "接続済み: {url}",
+    "connecting": "接続中...",
+    "failed": "接続に失敗しました。",
+    "notConnected": "未接続です。"
+  },
+  "summary": {
+    "final": "最終",
+    "finalResult": "最終結果",
+    "lastRound": "前回のラウンド",
+    "roundResult": "ラウンド結果"
+  },
+  "validation": {
+    "landingMissingInput": "プレイヤー名または再参加コードが必要です。",
+    "landingNeedsSignaling": "開始するにはシグナリングサーバーへ接続してください。"
+  },
+  "waiting": {
+    "hostStart": "ホストの開始を待っています",
+    "roundComplete": "ラウンド完了",
+    "noCards": "カードなし"
+  }
+}

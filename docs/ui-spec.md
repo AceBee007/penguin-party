@@ -46,6 +46,52 @@ type AppDialog =
 
 ## 3. 共通 UI
 
+### 表示文言と多言語化プレースホルダー
+
+固定表示文言は、React JSX、PixiJS canvas、状態メッセージ、button label、aria-label に直接書かず、placeholder key を経由して表示します。
+実表示の単語・文章は `src/i18n/locales/{locale}.json` に置き、UI 実装は `t('message.initialMultiplayer')` のような dot 区切り key だけを参照します。
+
+目的:
+
+- 将来の多言語対応に備え、画面構造と実表示文言を分離する
+- UI 上の固定文言を一覧できる単一の辞書ファイルに集約する
+- canvas 内の PixiJS text も React DOM と同じ辞書から表示する
+- 文言差し替え時にゲームロジック、P2P 同期、レイアウト処理を変更しなくてよい状態にする
+
+対象:
+
+- 画面名、panel title、button label、input label
+- game message、lobby message、dialog message
+- card color label、status label、role label、room status label
+- aria-label など支援技術向けの固定文言
+- PixiJS canvas 内に描画する `Round Complete`、`No cards`、card color label など
+
+対象外:
+
+- player name、room name、roomId、peerId、re-join code
+- score、card count、revision、rank などの数値
+- server や game rules から返るエラー本文
+
+補間:
+
+```ts
+t('message.cardPlayed', {
+  displayName: player.displayName,
+  color: cardColorLabel(card.color),
+});
+```
+
+辞書側は `{displayName}` や `{color}` のような placeholder を使います。
+placeholder 名は locale 間で同じにし、翻訳文側が語順だけを変更できるようにします。
+
+実装ルール:
+
+- default locale は `en` とし、現在の既存表示文言を `src/i18n/locales/en.json` に保存する
+- 表示 key は意味単位で命名し、`button.start`、`message.roomCreated`、`card.color.green` のように分類する
+- missing key は開発中に `[message.key]` のような placeholder 表示になってよいが、出荷前に残してはいけない
+- 新しい UI 文言を追加する場合は、まず辞書へ key を追加してから UI 側で参照する
+- locale 切り替え UI は landing page 右上に表示する
+
 ### 接続状況インジケーター
 
 すべてのゲームシーンの左上に、常時接続状況を表示します。
@@ -95,6 +141,7 @@ interface ConnectionIndicatorView {
 ### レイアウト
 
 ```txt
+                                      [Language v]
 Penguin Party
 [Player_a3f91c____________]
 [re-join code_____________]
@@ -103,6 +150,46 @@ Penguin Party
 
 [http://127.0.0.1:15201____] [接続]
 ```
+
+### 言語選択
+
+landing page の右上に、独立 component として言語選択 pulldown を表示します。
+component は表示部品だけでなく、現在 locale の決定、cookie 保存、`lang` query の削除も同じ責務として持ちます。
+
+表示ルール:
+
+- 選択肢は対応済み locale だけを表示する
+- 各選択肢の label はその言語自身で表示する
+- 例: English、日本語、简体中文、繁體中文
+- 現在対応済み locale は `en` と `ja`
+- `en` の表示名は `English`
+- `ja` の表示名は `日本語`
+- pulldown の accessible label は辞書経由で表示する
+
+locale 決定優先度:
+
+1. URL query の `lang`
+2. cookie の `prefered-language`
+3. browser language (`navigator.languages` / `navigator.language`) から最も近い対応 locale を推測
+4. 判定不能な場合は `en`
+
+詳細:
+
+- `lang` query が存在する場合は、常に query の値を最優先する
+- `lang=ja-JP` のような地域付き言語コードは、対応 locale の中で最も近い `ja` として扱う
+- `lang` query に対応できない値が入った場合は `en` に fallback する
+- `lang` query で選ばれた locale は cookie に保存しない
+- query に `lang` がない場合だけ `prefered-language` cookie を読む
+- cookie に対応 locale が入っている場合、その locale で UI を表示する
+- cookie がない場合だけ browser language から推測する
+- browser language でも推測できない場合は `en` を表示し、この fallback では cookie を設定しない
+
+操作:
+
+- ユーザーが pulldown で locale を選択したら、まず `prefered-language` cookie に locale code を保存する
+- 手動選択時に URL query に `lang` が存在する場合は、cookie 保存後に `lang` query pair を URL から削除する
+- `lang` query を削除しても他の query (`signaling-server`、`rejoin` など) は保持する
+- 選択後、React DOM と PixiJS canvas 内の固定表示文言を選択 locale の辞書で再表示する
 
 ### プレイヤー名入力
 

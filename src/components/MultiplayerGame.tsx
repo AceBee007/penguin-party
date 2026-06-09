@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrandTitle } from './BrandTitle';
+import { LanguageSelector } from './LanguageSelector';
 import { PixiDragStage } from './PixiDragStage';
 import {
-  CARD_COLOR_LABELS,
   buildStateHash,
   createLocalGame,
   getActivePlayer,
@@ -36,6 +36,14 @@ import {
   setSignalingServerQuery,
   validatePlayerName,
 } from '../network/signalingClient';
+import {
+  cardColorLabel,
+  peerConnectionStatusLabel,
+  peerRoleLabel,
+  roomStatusLabel,
+  t,
+  type LocaleCode,
+} from '../i18n/uiText';
 import type {
   EventCommitted,
   Heartbeat,
@@ -84,7 +92,11 @@ interface ScoreboardPlayerView {
   totalPenalty: number;
 }
 
-export function MultiplayerGame() {
+interface MultiplayerGameProps {
+  locale: LocaleCode;
+}
+
+export function MultiplayerGame({ locale }: MultiplayerGameProps) {
   const [scene, setScene] = useState<MultiplayerScene>('landing_page');
   const [identity, setIdentity] = useState<NetworkIdentity | null>(null);
   const [game, setGame] = useState<GameSessionState | null>(null);
@@ -106,11 +118,11 @@ export function MultiplayerGame() {
   const [joinError, setJoinError] = useState<string | null>(null);
   const [joiningRoomId, setJoiningRoomId] = useState<string | null>(null);
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
-  const [roomName, setRoomName] = useState('Penguin Table');
+  const [roomName, setRoomName] = useState(t('room.defaultName'));
   const [createPassword, setCreatePassword] = useState('');
   const [joinPassword, setJoinPassword] = useState('');
-  const [message, setMessage] = useState('Enter a player name to start.');
-  const [networkStatus, setNetworkStatus] = useState('idle');
+  const [message, setMessage] = useState(t('message.initialMultiplayer'));
+  const [networkStatus, setNetworkStatus] = useState(t('network.idle'));
   const [hostPeerId, setHostPeerId] = useState<string | null>(null);
   const meshRef = useRef<PeerMeshClient | null>(null);
   const scoreboardOverlayPanelRef = useRef<HTMLElement | null>(null);
@@ -138,6 +150,13 @@ export function MultiplayerGame() {
   );
   const landingMessage = getLandingMessage(hasLandingStartInput, signalingConnectionStatus, message);
   const roomItems = useMemo(() => rooms.map(toRoomListItem), [rooms]);
+
+  useEffect(() => {
+    if (!identity && scene === 'landing_page') {
+      setMessage(t('message.initialMultiplayer'));
+      setNetworkStatus(t('network.idle'));
+    }
+  }, [identity, locale, scene]);
 
   useEffect(() => {
     identityRef.current = identity;
@@ -192,7 +211,7 @@ export function MultiplayerGame() {
   const refreshOpenRooms = useCallback(async (showLoading = false) => {
     if (!connectedSignalingServerUrl) {
       setRooms([]);
-      setMessage('Connect to a signaling server before loading rooms.');
+      setMessage(t('message.connectBeforeLoadingRooms'));
       return;
     }
 
@@ -205,11 +224,11 @@ export function MultiplayerGame() {
       setRooms(nextRooms);
 
       if (showLoading) {
-        setMessage(nextRooms.length > 0 ? 'Select an open room or create a new one.' : 'No open rooms yet.');
+        setMessage(nextRooms.length > 0 ? t('message.roomListPrompt') : t('message.noOpenRoomsYet'));
       }
     } catch {
       setRooms([]);
-      setMessage('Signaling server is unavailable. Start npm run signaling.');
+      setMessage(t('message.signalingUnavailable'));
     } finally {
       if (showLoading) {
         setIsRoomListLoading(false);
@@ -229,7 +248,7 @@ export function MultiplayerGame() {
     signalingConnectionRequestRef.current = requestId;
     setSignalingConnectionStatus('checking');
     setConnectedSignalingServerUrl(null);
-    setMessage('Connecting to signaling server.');
+    setMessage(t('message.connectingSignaling'));
 
     try {
       const normalizedUrl = normalizeSignalingHttpUrl(signalingServerUrl);
@@ -243,14 +262,14 @@ export function MultiplayerGame() {
       setConnectedSignalingServerUrl(normalizedUrl);
       setSignalingConnectionStatus('connected');
       setSignalingServerQuery(normalizedUrl);
-      setMessage('Connected to signaling server.');
+      setMessage(t('message.connectedSignaling'));
     } catch (error) {
       if (signalingConnectionRequestRef.current !== requestId) {
         return;
       }
 
       setSignalingConnectionStatus('error');
-      setMessage(error instanceof Error ? error.message : 'Signaling server connection failed.');
+      setMessage(error instanceof Error ? error.message : t('message.signalingConnectionFailed'));
     }
   }, [signalingServerUrl]);
 
@@ -526,7 +545,7 @@ export function MultiplayerGame() {
     const signalingHttpUrl = connectedSignalingServerUrl;
 
     if (!signalingHttpUrl) {
-      setMessage('Connect to a signaling server before joining a room.');
+      setMessage(t('message.connectBeforeJoin'));
       return;
     }
 
@@ -541,7 +560,7 @@ export function MultiplayerGame() {
       },
       onPayload: (envelope) => handleP2PPayload(envelope),
       onChannelOpen: (peer) => {
-        setMessage(`DataChannel open with ${peer.displayName}.`);
+        setMessage(t('message.dataChannelOpen', { displayName: peer.displayName }));
 
         const currentIdentity = identityRef.current ?? nextIdentity;
         if (currentIdentity.peerId === hostPeerIdRef.current && gameRef.current) {
@@ -582,7 +601,7 @@ export function MultiplayerGame() {
 
   const handleEnterMatchmaking = useCallback(async () => {
     if (!connectedSignalingServerUrl) {
-      setMessage('Connect to a signaling server before starting.');
+      setMessage(t('message.connectBeforeStart'));
       return;
     }
 
@@ -591,10 +610,10 @@ export function MultiplayerGame() {
         const nextIdentity = await resumeGame({ rejoinCode: trimmedRejoinCode }, connectedSignalingServerUrl);
         setPlayerName(nextIdentity.displayName);
         setRejoinCode('');
-        setMessage(`Resumed room ${nextIdentity.room.roomId}.`);
+        setMessage(t('message.resumedRoom', { roomId: nextIdentity.room.roomId }));
         startMesh(nextIdentity);
       } catch (error) {
-        setMessage(error instanceof Error ? error.message : 'Re-join failed.');
+        setMessage(error instanceof Error ? error.message : t('message.rejoinFailed'));
       }
       return;
     }
@@ -612,10 +631,10 @@ export function MultiplayerGame() {
       nameReservationTokenRef.current = reservation.nameReservationToken;
       setPlayerName(trimmedPlayerName);
       setScene('matchmaking_lobby');
-      setMessage('Loading open rooms.');
+      setMessage(t('message.loadingOpenRooms'));
       void refreshOpenRooms(true);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Player name is unavailable.');
+      setMessage(error instanceof Error ? error.message : t('message.playerNameUnavailable'));
     }
   }, [
     connectedSignalingServerUrl,
@@ -646,23 +665,23 @@ export function MultiplayerGame() {
         const nextIdentity = await resumeGame({ rejoinCode: rejoinCodeFromQuery }, connectedSignalingServerUrl);
         setPlayerName(nextIdentity.displayName);
         setRejoinCode('');
-        setMessage(`Resumed room ${nextIdentity.room.roomId}.`);
+        setMessage(t('message.resumedRoom', { roomId: nextIdentity.room.roomId }));
         setRejoinCodeQuery(rejoinCodeFromQuery);
         startMesh(nextIdentity);
       } catch (error) {
-        setMessage(error instanceof Error ? error.message : 'このrejoin codeは無効');
+        setMessage(error instanceof Error ? error.message : t('message.rejoinCodeInvalid'));
       }
     })();
   }, [connectedSignalingServerUrl, startMesh]);
 
   const handleCreateRoom = useCallback(async () => {
     if (!isPlayerNameValid) {
-      setMessage('Enter a player name before creating a room.');
+      setMessage(t('message.enterNameBeforeCreate'));
       return;
     }
 
     if (!connectedSignalingServerUrl) {
-      setMessage('Connect to a signaling server before creating a room.');
+      setMessage(t('message.connectBeforeCreate'));
       return;
     }
 
@@ -680,10 +699,10 @@ export function MultiplayerGame() {
       nameReservationTokenRef.current = null;
       setIsCreateDialogOpen(false);
       setCreatePassword('');
-      setMessage(`Room ${nextIdentity.room.roomId} created. Waiting for players.`);
+      setMessage(t('message.roomCreated', { roomId: nextIdentity.room.roomId }));
       startMesh(nextIdentity);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Room creation failed.');
+      setMessage(error instanceof Error ? error.message : t('message.roomCreationFailed'));
     } finally {
       setIsCreatingRoom(false);
     }
@@ -691,12 +710,12 @@ export function MultiplayerGame() {
 
   const handleJoinRoom = useCallback(async (room: RoomListItemView, password?: string) => {
     if (!isPlayerNameValid) {
-      setMessage('Enter a player name before joining a room.');
+      setMessage(t('message.enterNameBeforeJoin'));
       return;
     }
 
     if (!connectedSignalingServerUrl) {
-      setMessage('Connect to a signaling server before joining a room.');
+      setMessage(t('message.connectBeforeJoin'));
       return;
     }
 
@@ -710,12 +729,12 @@ export function MultiplayerGame() {
         password: password?.trim() || undefined,
       }, connectedSignalingServerUrl);
       nameReservationTokenRef.current = null;
-      setMessage(`Joined room ${nextIdentity.room.roomId}.`);
+      setMessage(t('message.joinedRoom', { roomId: nextIdentity.room.roomId }));
       setPasswordRoom(null);
       setJoinPassword('');
       startMesh(nextIdentity);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Join failed.';
+      const errorMessage = error instanceof Error ? error.message : t('message.joinFailed');
 
       if (error instanceof JoinRoomFailure && error.code === 'room_closed') {
         setPasswordRoom(null);
@@ -742,7 +761,7 @@ export function MultiplayerGame() {
 
   const handleRoomClick = useCallback((room: RoomListItemView) => {
     if (!room.canJoin) {
-      setMessage('Room is full.');
+      setMessage(t('message.roomFull'));
       return;
     }
 
@@ -772,9 +791,9 @@ export function MultiplayerGame() {
     setGame(null);
     setPeers([]);
     setHostPeerId(null);
-    setNetworkStatus('idle');
+    setNetworkStatus(t('network.idle'));
     setScene('matchmaking_lobby');
-    setMessage('Returned to matchmaking lobby.');
+    setMessage(t('message.returnedToMatchmaking'));
     void refreshOpenRooms(true);
     if (isPlayerNameValid) {
       void refreshNameReservation(trimmedPlayerName);
@@ -835,7 +854,7 @@ export function MultiplayerGame() {
     }
 
     if (!currentHostPeerId) {
-      setMessage('No current host is available.');
+      setMessage(t('message.noCurrentHost'));
       return;
     }
 
@@ -848,11 +867,11 @@ export function MultiplayerGame() {
       clientSentAt: Date.now(),
     };
     meshRef.current?.sendPayload(currentHostPeerId, command);
-    setMessage('Sent play_card command to host.');
+    setMessage(t('message.sentPlayCardCommand'));
   }, []);
 
   return (
-    <main className="app-shell" data-scene={currentScene}>
+    <main className="app-shell" data-scene={currentScene} lang={locale}>
       <header className="topbar">
         <div className="brand">
           <div className="brand__copy">
@@ -860,17 +879,20 @@ export function MultiplayerGame() {
             <span className="brand__mode">{sceneLabel(currentScene)}</span>
           </div>
         </div>
-        <div className="connection-indicator" aria-label={`P2P status ${networkStatus}`}>
+        <div className="connection-indicator" aria-label={t('aria.p2pStatus', { status: networkStatus })}>
           <span className="connection-indicator__dot" />
           {networkStatus}
         </div>
       </header>
 
       {!identity && scene === 'landing_page' ? (
-        <section className="landing-page" aria-label="Landing page">
+        <section className="landing-page" aria-label={t('aria.landingPage')}>
+          <div className="landing-page__language">
+            <LanguageSelector />
+          </div>
           <div className="landing-form">
             <label className="player-name-field">
-              Player name
+              {t('field.playerName')}
               <input
                 data-player-name
                 value={playerName}
@@ -884,7 +906,7 @@ export function MultiplayerGame() {
               />
             </label>
             <label className="player-name-field">
-              Re-join code
+              {t('field.rejoinCode')}
               <input
                 data-rejoin-code-input
                 value={rejoinCode}
@@ -898,10 +920,10 @@ export function MultiplayerGame() {
               />
             </label>
             <button type="button" disabled={!canStartLanding} onClick={() => void handleEnterMatchmaking()}>
-              Start
+              {t('button.start')}
             </button>
             <label className="player-name-field signaling-server-field">
-              Signaling server
+              {t('field.signalingServer')}
               <input
                 data-signaling-server-input
                 value={signalingServerUrl}
@@ -919,7 +941,7 @@ export function MultiplayerGame() {
               disabled={!canConnectSignalingServer}
               onClick={() => void handleConnectSignalingServer()}
             >
-              接続
+              {t('button.connect')}
             </button>
             <p className="landing-form__connection-status" data-signaling-status data-status={signalingConnectionStatus}>
               {signalingConnectionLabel}
@@ -932,16 +954,16 @@ export function MultiplayerGame() {
       ) : null}
 
       {!identity && scene === 'matchmaking_lobby' ? (
-        <section className="matchmaking-lobby" aria-label="Matchmaking lobby">
+        <section className="matchmaking-lobby" aria-label={t('scene.matchmaking_lobby')}>
           <div className="room-list-panel">
             <div className="room-list-panel__header">
-              <h2>Open rooms</h2>
+              <h2>{t('room.openRooms')}</h2>
               <button className="button-secondary" type="button" onClick={() => void refreshOpenRooms(true)}>
-                Refresh
+                {t('button.refresh')}
               </button>
             </div>
             <label className="player-name-field player-name-field--compact">
-              Player name
+              {t('field.playerName')}
               <input
                 data-player-name
                 value={playerName}
@@ -951,10 +973,10 @@ export function MultiplayerGame() {
             </label>
             <div className="room-list-scroll" data-room-list>
               {isRoomListLoading && roomItems.length === 0 ? (
-                <div className="room-list-empty">Loading rooms</div>
+                <div className="room-list-empty">{t('room.listLoading')}</div>
               ) : null}
               {!isRoomListLoading && roomItems.length === 0 ? (
-                <div className="room-list-empty">No open rooms</div>
+                <div className="room-list-empty">{t('room.listEmpty')}</div>
               ) : null}
               {roomItems.map((room) => (
                 <button
@@ -969,13 +991,13 @@ export function MultiplayerGame() {
                 >
                   <span className="room-list-item__main">
                     <span className="room-list-item__title">
-                      {room.hasPassword ? <span className="room-lock" aria-label="Password required" /> : null}
+                      {room.hasPassword ? <span className="room-lock" aria-label={t('aria.passwordRequired')} /> : null}
                       <strong>{room.roomName}</strong>
                     </span>
                     <span className="room-list-item__meta">
                       {roomStatusLabel(room.status)}
-                      {room.joinRole === 'spectator' ? ' / Spectator' : ''}
-                      {!room.canJoin ? ' / Full' : ''}
+                      {room.joinRole === 'spectator' ? t('common.slash') + t('room.spectatorBadge') : ''}
+                      {!room.canJoin ? t('common.slash') + t('room.full') : ''}
                     </span>
                   </span>
                   <span className="room-list-item__count">
@@ -992,7 +1014,7 @@ export function MultiplayerGame() {
             type="button"
             onClick={() => setIsCreateDialogOpen(true)}
           >
-            新しいゲームルームを作成
+            {t('button.createGameRoom')}
           </button>
           <p className="lobby-message" data-game-message>{message}</p>
 
@@ -1008,9 +1030,9 @@ export function MultiplayerGame() {
                   void handleCreateRoom();
                 }}
               >
-                <h2 id="create-room-title">Create room</h2>
+                <h2 id="create-room-title">{t('dialog.createRoomTitle')}</h2>
                 <label>
-                  Room name
+                  {t('field.roomName')}
                   <input
                     data-create-room-name
                     value={roomName}
@@ -1019,7 +1041,7 @@ export function MultiplayerGame() {
                   />
                 </label>
                 <label>
-                  Password
+                  {t('field.password')}
                   <input
                     data-create-password
                     value={createPassword}
@@ -1030,10 +1052,10 @@ export function MultiplayerGame() {
                 </label>
                 <div className="dialog-actions">
                   <button data-create-room-submit type="submit" disabled={isCreatingRoom || !roomName.trim()}>
-                    Create room
+                    {t('button.createRoom')}
                   </button>
                   <button className="button-secondary" type="button" onClick={() => setIsCreateDialogOpen(false)}>
-                    Back
+                    {t('button.back')}
                   </button>
                 </div>
               </form>
@@ -1052,10 +1074,10 @@ export function MultiplayerGame() {
                   void handleJoinRoom(passwordRoom, joinPassword);
                 }}
               >
-                <h2 id="join-password-title">Room password</h2>
+                <h2 id="join-password-title">{t('dialog.joinPasswordTitle')}</h2>
                 <p>{passwordRoom.roomName}</p>
                 <label>
-                  Password
+                  {t('field.password')}
                   <input
                     data-join-password
                     value={joinPassword}
@@ -1067,10 +1089,10 @@ export function MultiplayerGame() {
                 {joinError ? <p className="dialog-error" data-join-error>{joinError}</p> : null}
                 <div className="dialog-actions">
                   <button data-join-room-submit type="submit" disabled={joiningRoomId === passwordRoom.roomId}>
-                    Join room
+                    {t('button.joinRoom')}
                   </button>
                   <button className="button-secondary" type="button" onClick={() => setPasswordRoom(null)}>
-                    Back
+                    {t('button.back')}
                   </button>
                 </div>
               </form>
@@ -1080,18 +1102,26 @@ export function MultiplayerGame() {
       ) : null}
 
       {identity ? (
-        <section className="game-shell" data-scene={currentScene} aria-label="Penguin Party P2P game">
-          <aside className="scoreboard" aria-label="Peers">
+        <section className="game-shell" data-scene={currentScene} aria-label={t('aria.p2pGame')}>
+          <aside className="scoreboard" aria-label={t('aria.peers')}>
             <div className="scoreboard__header">
-              <span>Room <strong data-room-id>{identity.room.roomId}</strong></span>
-              <strong data-channel-state>{connectedPeerCount > 1 ? 'Open' : 'Connecting'}</strong>
+              <span>{t('room.idLabel')} <strong data-room-id>{identity.room.roomId}</strong></span>
+              <strong data-channel-state>
+                {connectedPeerCount > 1 ? t('room.channel.open') : t('room.channel.connecting')}
+              </strong>
             </div>
             <div className="scoreboard-compact" data-compact-scoreboard>
               <div className="scoreboard-compact__players">
                 {scoreboardPlayers.map((player) => (
                   <div
                     className="scoreboard-compact__player"
-                    aria-label={player.isLocal ? `${player.displayName} You` : player.isActive ? 'Active player' : 'Player'}
+                    aria-label={
+                      player.isLocal
+                        ? t('aria.you', { displayName: player.displayName })
+                        : player.isActive
+                          ? t('aria.activePlayer')
+                          : t('aria.player')
+                    }
                     data-active={player.isActive}
                     data-compact-player
                     data-local={player.isLocal}
@@ -1104,7 +1134,7 @@ export function MultiplayerGame() {
               <button
                 className="scoreboard-toggle"
                 aria-expanded={isScoreboardExpanded}
-                aria-label={isScoreboardExpanded ? 'Collapse scoreboard' : 'Expand scoreboard'}
+                aria-label={isScoreboardExpanded ? t('aria.scoreboardCollapse') : t('aria.scoreboardExpand')}
                 data-scoreboard-toggle
                 type="button"
                 onClick={() => setIsScoreboardExpanded((expanded) => !expanded)}
@@ -1119,14 +1149,14 @@ export function MultiplayerGame() {
                     <strong>{peer.displayName}</strong>
                     <span>
                       {currentReadyGate && peer.playerId
-                        ? `${peer.role} / ${readyByPlayerId[peer.playerId] ? 'ready' : 'preparing'}`
+                        ? `${peerRoleLabel(peer.role)}${t('common.slash')}${readyByPlayerId[peer.playerId] ? t('peerStatus.ready') : t('peerStatus.preparing')}`
                         : game
-                          ? peer.role
-                          : `${peer.role} / ${peer.connectionStatus}`}
+                          ? peerRoleLabel(peer.role)
+                          : `${peerRoleLabel(peer.role)}${t('common.slash')}${peerConnectionStatusLabel(peer.connectionStatus)}`}
                     </span>
                   </div>
                   <div className="player-row__stats">
-                    <span>{peer.playerId ?? 'spectator'}</span>
+                    <span>{peer.playerId ?? t('role.spectator')}</span>
                   </div>
                 </div>
               ))}
@@ -1137,20 +1167,20 @@ export function MultiplayerGame() {
             <div className="scoreboard-overlay" data-scoreboard-overlay>
               <section
                 className="scoreboard-overlay__panel"
-                aria-label="Expanded scoreboard"
+                aria-label={t('aria.expandedScoreboard')}
                 aria-modal="false"
                 ref={scoreboardOverlayPanelRef}
                 role="dialog"
               >
                 <div className="scoreboard-overlay__header">
                   <div>
-                    <span>Room</span>
+                    <span>{t('room.idLabel')}</span>
                     <strong>{identity.room.roomName}</strong>
                   </div>
                   <button
                     className="scoreboard-toggle scoreboard-toggle--open"
                     aria-expanded="true"
-                    aria-label="Collapse scoreboard"
+                    aria-label={t('aria.scoreboardCollapse')}
                     type="button"
                     onClick={() => setIsScoreboardExpanded(false)}
                   >
@@ -1159,7 +1189,7 @@ export function MultiplayerGame() {
                 </div>
                 <div className="scoreboard-overlay__hint" data-active-scoreboard-hint>
                   <span className="scoreboard-overlay__hint-block" />
-                  <span>Active player</span>
+                  <span>{t('aria.activePlayer')}</span>
                 </div>
                 <div className="scoreboard-overlay__players">
                   {scoreboardPlayers.map((player) => (
@@ -1171,8 +1201,8 @@ export function MultiplayerGame() {
                       key={player.playerId}
                     >
                       <span>{player.displayName}</span>
-                      <span>{player.remainingCardCount} cards</span>
-                      <strong>{player.totalPenalty} pts</strong>
+                      <span>{t('common.cards', { count: player.remainingCardCount })}</span>
+                      <strong>{t('common.points', { count: player.totalPenalty })}</strong>
                     </div>
                   ))}
                 </div>
@@ -1189,7 +1219,7 @@ export function MultiplayerGame() {
                       {readyGateActionLabel}
                     </button>
                     <button type="button" onClick={handleLeaveClick}>
-                      Leave
+                      {t('button.leave')}
                     </button>
                   </div>
                   {localReady || readyGatePlayerIds.length < 2 ? (
@@ -1199,7 +1229,7 @@ export function MultiplayerGame() {
               ) : (
                 <div className="action-bar__buttons">
                   <button type="button" onClick={handleLeaveClick}>
-                    Leave
+                    {t('button.leave')}
                   </button>
                 </div>
               )}
@@ -1219,7 +1249,7 @@ export function MultiplayerGame() {
                 />
               ) : (
                 <div className="waiting-canvas" data-waiting-for-snapshot>
-                  Waiting for host start
+                  {t('waiting.hostStart')}
                 </div>
               )}
             </div>
@@ -1228,7 +1258,7 @@ export function MultiplayerGame() {
               <div className="spectator-board-controls">
                 <button
                   className="board-icon-button board-icon-button--maximize"
-                  aria-label="Maximize board"
+                  aria-label={t('button.maximizeBoard')}
                   data-spectator-board-toggle
                   type="button"
                   onClick={() => setIsBoardMaximized(true)}
@@ -1242,7 +1272,7 @@ export function MultiplayerGame() {
           </section>
 
           {isBoardMaximized && game && isSpectator ? (
-            <div className="board-fullscreen" data-board-fullscreen role="dialog" aria-label="Maximized board">
+            <div className="board-fullscreen" data-board-fullscreen role="dialog" aria-label={t('aria.maximizedBoard')}>
               <PixiDragStage
                 activePlayerId={activePlayer?.playerId ?? null}
                 canPlay={false}
@@ -1256,7 +1286,7 @@ export function MultiplayerGame() {
               />
               <button
                 className="board-icon-button board-icon-button--minimize board-fullscreen__close"
-                aria-label="Restore board"
+                aria-label={t('button.restoreBoard')}
                 data-spectator-board-close
                 type="button"
                 onClick={() => setIsBoardMaximized(false)}
@@ -1266,54 +1296,56 @@ export function MultiplayerGame() {
             </div>
           ) : null}
 
-          <aside className="round-panel" aria-label="P2P details">
+          <aside className="round-panel" aria-label={t('aria.p2pDetails')}>
             <div className="metric-grid">
               <div>
-                <span>Players</span>
+                <span>{t('metric.players')}</span>
                 <strong data-player-count>{playerCount}</strong>
               </div>
               {!game ? (
                 <div>
-                  <span>Connected</span>
+                  <span>{t('metric.connected')}</span>
                   <strong data-connected-count>{connectedPeerCount}</strong>
                 </div>
               ) : (
                 <div>
-                  <span>Rejoin</span>
-                  <strong data-rejoin-code>{identity.rejoinCode ?? 'none'}</strong>
+                  <span>{t('metric.rejoin')}</span>
+                  <strong data-rejoin-code>{identity.rejoinCode ?? t('common.none')}</strong>
                 </div>
               )}
               <div>
-                <span>Spectators</span>
+                <span>{t('metric.spectators')}</span>
                 <strong data-spectator-count>{spectatorCount}</strong>
               </div>
               <div>
-                <span>Board</span>
+                <span>{t('metric.board')}</span>
                 <strong data-board-count>{game?.currentRound?.board.occupiedCellKeys.length ?? 0}</strong>
               </div>
               <div>
-                <span>Hand</span>
+                <span>{t('metric.hand')}</span>
                 <strong data-hand-count>{activeRoundPlayer?.remainingCardCount ?? 0}</strong>
               </div>
               <div>
-                <span>Legal</span>
+                <span>{t('metric.legal')}</span>
                 <strong data-legal-count>{legalMoves.length}</strong>
               </div>
               <div>
-                <span>Revision</span>
+                <span>{t('metric.revision')}</span>
                 <strong data-revision>{game?.revision ?? 0}</strong>
               </div>
               <div>
-                <span>Host</span>
-                <strong data-host-peer>{hostPeerId ?? 'none'}</strong>
+                <span>{t('metric.host')}</span>
+                <strong data-host-peer>{hostPeerId ?? t('common.none')}</strong>
               </div>
             </div>
 
             {game?.status === 'round_result' || game?.status === 'game_result' ? (
               <div className="summary-panel" data-game-result={game.status === 'game_result' ? 'true' : undefined} data-round-result>
                 <h2>
-                  {game.status === 'game_result' ? 'Final result' : 'Round result'}{' '}
-                  {latestSummary ? `${latestSummary.roundIndex + 1} / ${game.totalRounds}` : ''}
+                  {game.status === 'game_result' ? t('summary.finalResult') : t('summary.roundResult')}{' '}
+                  {latestSummary
+                    ? t('common.fraction', { current: latestSummary.roundIndex + 1, total: game.totalRounds })
+                    : ''}
                 </h2>
                 {standings.map((standing) => {
                   const roundResult = latestSummary?.playerResults.find(
@@ -1322,9 +1354,9 @@ export function MultiplayerGame() {
 
                   return (
                     <div className="summary-row" key={standing.playerId}>
-                      <span>#{standing.rank} {standing.displayName}</span>
+                      <span>{t('common.rankedName', { displayName: standing.displayName, rank: standing.rank })}</span>
                       <span>{formatPenaltyDelta(roundResult?.netPenaltyDelta ?? 0)}</span>
-                      <strong>{standing.totalPenalty} pts</strong>
+                      <strong>{t('common.points', { count: standing.totalPenalty })}</strong>
                     </div>
                   );
                 })}
@@ -1347,14 +1379,14 @@ export function MultiplayerGame() {
       {isLeaveConfirmOpen ? (
         <div className="dialog-backdrop">
           <div className="dialog-card" aria-labelledby="leave-room-title" aria-modal="true" role="dialog">
-            <h2 id="leave-room-title">Leave game?</h2>
-            <p>You will leave this room and return to matchmaking.</p>
+            <h2 id="leave-room-title">{t('dialog.leaveRoomTitle')}</h2>
+            <p>{t('dialog.leaveRoomBody')}</p>
             <div className="dialog-actions">
               <button data-confirm-leave-room type="button" onClick={handleLeaveRoom}>
-                Leave
+                {t('button.leave')}
               </button>
               <button className="button-secondary" type="button" onClick={() => setIsLeaveConfirmOpen(false)}>
-                Stay
+                {t('button.stay')}
               </button>
             </div>
           </div>
@@ -1386,13 +1418,13 @@ export function MultiplayerGame() {
       meshRef.current?.setHostPeerId(payload.currentHostPeerId);
       gameRef.current = payload.snapshot;
       setGame(payload.snapshot);
-      setMessage('Received host snapshot.');
+      setMessage(t('message.receivedHostSnapshot'));
       sendPeerReady(payload.snapshot);
       return;
     }
 
     if (payload.type === 'peer_ready') {
-      setMessage('Peer is ready.');
+      setMessage(t('message.peerReady'));
       return;
     }
 
@@ -1414,7 +1446,7 @@ export function MultiplayerGame() {
     if (payload.type === 'event_committed') {
       gameRef.current = payload.snapshot;
       setGame(payload.snapshot);
-      setMessage(`Committed event ${payload.eventSeq}; revision ${payload.revision}.`);
+      setMessage(t('message.committedEvent', { eventSeq: payload.eventSeq, revision: payload.revision }));
       return;
     }
 
@@ -1438,12 +1470,12 @@ export function MultiplayerGame() {
         setGame(payload.snapshot);
       }
 
-      setNetworkStatus(`host rev ${payload.revision}`);
+      setNetworkStatus(t('network.hostRevision', { revision: payload.revision }));
       return;
     }
 
     if (payload.type === 'command_rejected') {
-      setMessage(`Command rejected: ${payload.reason}`);
+      setMessage(t('message.commandRejected', { reason: payload.reason }));
     }
   }
 
@@ -1551,7 +1583,7 @@ export function MultiplayerGame() {
     try {
       await markRoomPlaying(currentIdentity.room.roomId, connectedSignalingServerUrl ?? undefined);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Could not mark room as playing.');
+      setMessage(error instanceof Error ? error.message : t('message.markRoomPlayingFailed'));
       return;
     }
 
@@ -1563,7 +1595,7 @@ export function MultiplayerGame() {
     setIdentity(playingIdentity);
     playingIdentity = await activateGameRejoinCode(playingIdentity);
     setScene('game_play');
-    setMessage(`Started ${playerPeers.length}-player game.`);
+    setMessage(t('message.startedMultiplayerGame', { count: playerPeers.length }));
 
     for (const peer of peersRef.current) {
       if (peer.peerId !== currentIdentity.peerId) {
@@ -1606,7 +1638,7 @@ export function MultiplayerGame() {
       setRejoinCodeQuery(nextRejoinCode);
       return nextIdentity;
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Could not issue rejoin code.');
+      setMessage(error instanceof Error ? error.message : t('message.rejoinIssueFailed'));
       return currentIdentity;
     }
   }
@@ -1654,7 +1686,7 @@ export function MultiplayerGame() {
     setGame(null);
     setHostPeerId(nextHostPeerId);
     setScene('waiting_room');
-    setMessage('Returned to waiting room.');
+    setMessage(t('message.returnedToWaitingRoom'));
   }
 
   function broadcastReadyGateState(
@@ -1705,7 +1737,7 @@ export function MultiplayerGame() {
       : selectWaitingRoomHost(candidates)?.peerId ?? null;
 
     if (!nextHostPeerId) {
-      setMessage('Host disconnected; no replacement host was available.');
+      setMessage(t('message.hostDisconnectedNoReplacement'));
       return;
     }
 
@@ -1732,7 +1764,7 @@ export function MultiplayerGame() {
       };
       identityRef.current = promotedIdentity;
       setIdentity(promotedIdentity);
-      setMessage('Host disconnected; this peer is the new host.');
+      setMessage(t('message.hostDisconnectedPromoted'));
 
       if (nextGame) {
         for (const peer of candidates) {
@@ -1742,7 +1774,7 @@ export function MultiplayerGame() {
         }
       }
     } else {
-      setMessage('Host disconnected; elected a replacement host.');
+      setMessage(t('message.hostDisconnectedElected'));
     }
   }
 
@@ -1838,7 +1870,10 @@ export function MultiplayerGame() {
       eventSeqRef.current += 1;
       gameRef.current = nextGame;
       setGame(nextGame);
-      setMessage(`${currentGame.players.find((player) => player.playerId === playerId)?.displayName} played ${CARD_COLOR_LABELS[currentGame.cardsById[cardId].color]}.`);
+      setMessage(t('message.cardPlayed', {
+        color: cardColorLabel(currentGame.cardsById[cardId].color),
+        displayName: currentGame.players.find((player) => player.playerId === playerId)?.displayName,
+      }));
 
       for (const peer of peersRef.current) {
         if (peer.peerId === currentIdentity.peerId) {
@@ -1924,7 +1959,7 @@ export function MultiplayerGame() {
     eventSeqRef.current += 1;
     gameRef.current = nextGame;
     setGame(nextGame);
-    setMessage(`Committed event ${eventSeqRef.current}; revision ${nextGame.revision}.`);
+    setMessage(t('message.committedEvent', { eventSeq: eventSeqRef.current, revision: nextGame.revision }));
 
     for (const peer of peersRef.current) {
       if (peer.peerId === currentIdentity.peerId || peer.connectionStatus !== 'connected') {
@@ -1945,7 +1980,7 @@ export function MultiplayerGame() {
 
   async function refreshNameReservation(displayName: string): Promise<void> {
     if (!connectedSignalingServerUrl) {
-      setMessage('Connect to a signaling server before refreshing player name.');
+      setMessage(t('message.connectBeforeRefreshName'));
       setScene('landing_page');
       return;
     }
@@ -1959,14 +1994,14 @@ export function MultiplayerGame() {
       nameReservationTokenRef.current = reservation.nameReservationToken;
     } catch (error) {
       if (Date.now() - lastRoomLeaveAtRef.current < 2500) {
-        setMessage('Returned to matchmaking lobby. Refreshing player name.');
+        setMessage(t('message.returnedToMatchmakingRefreshingName'));
         window.setTimeout(() => {
           void refreshNameReservation(displayName);
         }, 500);
         return;
       }
 
-      setMessage(error instanceof Error ? error.message : 'Player name is unavailable.');
+      setMessage(error instanceof Error ? error.message : t('message.playerNameUnavailable'));
       releaseCurrentNameReservation();
       setScene('landing_page');
     }
@@ -2066,18 +2101,18 @@ function pruneReadyState(
 
 function readyActionLabel(gate: ReadyGateKind, isReady: boolean): string {
   if (isReady) {
-    return gate === 'waiting_room' ? '準備中に戻る' : 'もう少し結果確認する';
+    return gate === 'waiting_room' ? t('ready.action.waitingRoomReady') : t('ready.action.resultReady');
   }
 
   if (gate === 'round_result') {
-    return '次のラウンドへ';
+    return t('ready.action.roundResult');
   }
 
   if (gate === 'game_result') {
-    return '開始待ちへ戻る';
+    return t('ready.action.gameResult');
   }
 
-  return '準備完了';
+  return t('ready.action.waitingRoom');
 }
 
 function readyStatusText(
@@ -2087,7 +2122,7 @@ function readyStatusText(
   playerCount: number,
 ): string {
   if (gate === 'waiting_room' && playerCount < 2) {
-    return '2名以上で開始できます。';
+    return t('ready.status.waitingRoomNeedsPlayers');
   }
 
   if (!isReady) {
@@ -2095,10 +2130,10 @@ function readyStatusText(
   }
 
   if (gate === 'waiting_room') {
-    return `他のプレイヤーの準備完了を待っている（準備未完了はあと${remainingCount}名）`;
+    return t('ready.status.waitingForPlayers', { count: remainingCount });
   }
 
-  return `結果確認中のプレイヤーを待っている（準備未完了はあと${remainingCount}名）`;
+  return t('ready.status.resultWaiting', { count: remainingCount });
 }
 
 function formatPenaltyDelta(penaltyDelta: number): string {
@@ -2193,7 +2228,7 @@ function createDefaultPlayerName(): string {
   }
 
   const suffix = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-  return `Player_${suffix}`;
+  return t('player.defaultName', { suffix });
 }
 
 function toRoomListItem(room: RoomMetadata): RoomListItemView {
@@ -2212,11 +2247,11 @@ function getLandingMessage(
   message: string,
 ): string {
   if (!hasLandingStartInput) {
-    return 'Player name or re-join code is required.';
+    return t('validation.landingMissingInput');
   }
 
   if (signalingConnectionStatus !== 'connected') {
-    return 'Connect to a signaling server to enable Start.';
+    return t('validation.landingNeedsSignaling');
   }
 
   return message;
@@ -2227,44 +2262,20 @@ function getSignalingConnectionLabel(
   connectedSignalingServerUrl: string | null,
 ): string {
   if (status === 'connected' && connectedSignalingServerUrl) {
-    return `Connected: ${connectedSignalingServerUrl}`;
+    return t('signaling.connected', { url: connectedSignalingServerUrl });
   }
 
   if (status === 'checking') {
-    return 'Connecting...';
+    return t('signaling.connecting');
   }
 
   if (status === 'error') {
-    return 'Connection failed.';
+    return t('signaling.failed');
   }
 
-  return 'Not connected.';
-}
-
-function roomStatusLabel(status: RoomMetadata['status']): string {
-  return status === 'waiting_for_start' ? '開始待ち' : 'プレイ中';
+  return t('signaling.notConnected');
 }
 
 function sceneLabel(scene: MultiplayerScene): string {
-  if (scene === 'landing_page') {
-    return 'Landing page';
-  }
-
-  if (scene === 'matchmaking_lobby') {
-    return 'Matchmaking lobby';
-  }
-
-  if (scene === 'waiting_room') {
-    return 'Waiting room';
-  }
-
-  if (scene === 'round_result') {
-    return 'Round result';
-  }
-
-  if (scene === 'game_result') {
-    return 'Game result';
-  }
-
-  return 'Game play';
+  return t(`scene.${scene}`);
 }

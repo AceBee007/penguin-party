@@ -1,0 +1,241 @@
+{
+  "app": {
+    "title": "Penguin Party"
+  },
+  "aria": {
+    "activePlayer": "Active player",
+    "connectionLocalGood": "Local connection good",
+    "expandedScoreboard": "Expanded scoreboard",
+    "gameBoard": "Penguin Party game board",
+    "landingPage": "Landing page",
+    "localGame": "Penguin Party local game",
+    "maximizedBoard": "Maximized board",
+    "p2pDetails": "Peer-to-peer details",
+    "p2pGame": "Penguin Party peer-to-peer game",
+    "p2pStatus": "Peer-to-peer status {status}",
+    "passwordRequired": "Password required",
+    "peers": "Peers",
+    "player": "Player",
+    "players": "Players",
+    "roundDetails": "Round details",
+    "scoreboardCollapse": "Collapse scoreboard",
+    "scoreboardExpand": "Expand scoreboard",
+    "you": "{displayName} You"
+  },
+  "button": {
+    "back": "Back",
+    "connect": "Connect",
+    "createGameRoom": "Create a new game room",
+    "createRoom": "Create room",
+    "joinRoom": "Join room",
+    "leave": "Leave",
+    "newLocalGame": "New local game",
+    "nextRound": "Next round",
+    "refresh": "Refresh",
+    "resolveNoMoves": "Resolve no moves",
+    "restoreBoard": "Restore board",
+    "maximizeBoard": "Maximize board",
+    "start": "Start",
+    "stay": "Stay"
+  },
+  "card": {
+    "initialBoardFooter": "B",
+    "color": {
+      "blue": "Blue",
+      "green": "Green",
+      "purple": "Purple",
+      "red": "Red",
+      "yellow": "Yellow"
+    }
+  },
+  "common": {
+    "cards": "{count} cards",
+    "fraction": "{current} / {total}",
+    "none": "none",
+    "points": "{count} pts",
+    "rankedName": "#{rank} {displayName}",
+    "roundOfTotal": "Round {round} / {total}",
+    "slash": " / "
+  },
+  "connection": {
+    "local": "Local"
+  },
+  "dialog": {
+    "createRoomTitle": "Create room",
+    "joinPasswordTitle": "Room password",
+    "leaveRoomBody": "You will leave this room and return to matchmaking.",
+    "leaveRoomTitle": "Leave game?"
+  },
+  "field": {
+    "language": "Language",
+    "password": "Password",
+    "playerName": "Player name",
+    "rejoinCode": "Re-join code",
+    "roomName": "Room name",
+    "signalingServer": "Signaling server"
+  },
+  "gameStatus": {
+    "game_result": "game result",
+    "round_active": "round active",
+    "round_result": "round result"
+  },
+  "local": {
+    "mode": "Local verification mode"
+  },
+  "message": {
+    "cardPlayed": "{displayName} played {color}.",
+    "commandRejected": "Command rejected: {reason}",
+    "committedEvent": "Committed event {eventSeq}; revision {revision}.",
+    "connectBeforeCreate": "Connect to a signaling server before creating a room.",
+    "connectBeforeJoin": "Connect to a signaling server before joining a room.",
+    "connectBeforeLoadingRooms": "Connect to a signaling server before loading rooms.",
+    "connectBeforeRefreshName": "Connect to a signaling server before refreshing player name.",
+    "connectBeforeStart": "Connect to a signaling server before starting.",
+    "connectedSignaling": "Connected to signaling server.",
+    "connectingSignaling": "Connecting to signaling server.",
+    "dataChannelOpen": "Data channel open with {displayName}.",
+    "enterNameBeforeCreate": "Enter a player name before creating a room.",
+    "enterNameBeforeJoin": "Enter a player name before joining a room.",
+    "hostDisconnectedElected": "Host disconnected; elected a replacement host.",
+    "hostDisconnectedNoReplacement": "Host disconnected; no replacement host was available.",
+    "hostDisconnectedPromoted": "Host disconnected; this peer is the new host.",
+    "initialLocal": "Drag a card to a highlighted pyramid slot.",
+    "initialMultiplayer": "Enter a player name to start.",
+    "joinedRoom": "Joined room {roomId}.",
+    "joinFailed": "Join failed.",
+    "loadingOpenRooms": "Loading open rooms.",
+    "markRoomPlayingFailed": "Could not mark room as playing.",
+    "moveRejected": "Move rejected.",
+    "nextRoundStarted": "Next round started.",
+    "noCurrentHost": "No current host is available.",
+    "noLegalMoveResolved": "No legal move was available, so the active player was eliminated for this round.",
+    "noOpenRoomsYet": "No open rooms yet.",
+    "peerReady": "Peer is ready.",
+    "playerNameUnavailable": "Player name is unavailable.",
+    "receivedHostSnapshot": "Received host snapshot.",
+    "rejoinCodeInvalid": "This re-join code is invalid.",
+    "rejoinFailed": "Re-join failed.",
+    "rejoinIssueFailed": "Could not issue rejoin code.",
+    "resumedRoom": "Resumed room {roomId}.",
+    "returnedToMatchmaking": "Returned to matchmaking lobby.",
+    "returnedToMatchmakingRefreshingName": "Returned to matchmaking lobby. Refreshing player name.",
+    "returnedToWaitingRoom": "Returned to waiting room.",
+    "roomCreated": "Room {roomId} created. Waiting for players.",
+    "roomCreationFailed": "Room creation failed.",
+    "roomFull": "Room is full.",
+    "roomListPrompt": "Select an open room or create a new one.",
+    "sentPlayCardCommand": "Sent play card command to host.",
+    "signalingConnectionFailed": "Signaling server connection failed.",
+    "signalingUnavailable": "Signaling server is unavailable. Start npm run signaling.",
+    "startedLocalGame": "Started a new local verification game.",
+    "startedMultiplayerGame": "Started {count}-player game."
+  },
+  "metric": {
+    "board": "Board",
+    "connected": "Connected",
+    "hand": "Hand",
+    "host": "Host",
+    "legal": "Legal",
+    "players": "Players",
+    "rejoin": "Rejoin",
+    "revision": "Revision",
+    "spectators": "Spectators"
+  },
+  "network": {
+    "hostRevision": "host rev {revision}",
+    "idle": "idle"
+  },
+  "player": {
+    "betweenRounds": "between rounds",
+    "defaultName": "Player_{suffix}",
+    "local": "You",
+    "numbered": "Player {number}"
+  },
+  "peerConnectionStatus": {
+    "closed": "closed",
+    "connected": "connected",
+    "connecting": "connecting",
+    "disconnected": "disconnected",
+    "new": "new",
+    "signaling": "signaling"
+  },
+  "peerStatus": {
+    "preparing": "preparing",
+    "ready": "ready"
+  },
+  "ready": {
+    "action": {
+      "gameResult": "Return to waiting room",
+      "resultReady": "Review results a bit longer",
+      "roundResult": "Next round",
+      "waitingRoom": "Ready",
+      "waitingRoomReady": "Back to preparing"
+    },
+    "status": {
+      "resultWaiting": "Waiting for players to finish reviewing results ({count} not ready).",
+      "waitingForPlayers": "Waiting for other players to be ready ({count} not ready).",
+      "waitingRoomNeedsPlayers": "At least 2 players are required to start."
+    }
+  },
+  "role": {
+    "host": "host",
+    "player": "player",
+    "spectator": "spectator"
+  },
+  "room": {
+    "channel": {
+      "connecting": "Connecting",
+      "open": "Open"
+    },
+    "defaultName": "Penguin Table",
+    "full": "Full",
+    "idLabel": "Room",
+    "listEmpty": "No open rooms",
+    "listLoading": "Loading rooms",
+    "openRooms": "Open rooms",
+    "spectatorBadge": "Spectator",
+    "status": {
+      "playing": "Playing",
+      "waiting_for_start": "Waiting to start"
+    }
+  },
+  "roundEndReason": {
+    "all_hands_empty": "all hands empty",
+    "all_players_blocked": "all players blocked",
+    "all_players_resolved": "all players resolved"
+  },
+  "roundPlayerStatus": {
+    "active": "active",
+    "blocked": "blocked",
+    "finished": "finished"
+  },
+  "scene": {
+    "game_play": "Game play",
+    "game_result": "Game result",
+    "landing_page": "Landing page",
+    "matchmaking_lobby": "Matchmaking lobby",
+    "round_result": "Round result",
+    "waiting_room": "Waiting room"
+  },
+  "signaling": {
+    "connected": "Connected: {url}",
+    "connecting": "Connecting...",
+    "failed": "Connection failed.",
+    "notConnected": "Not connected."
+  },
+  "summary": {
+    "final": "Final",
+    "finalResult": "Final result",
+    "lastRound": "Last round",
+    "roundResult": "Round result"
+  },
+  "validation": {
+    "landingMissingInput": "Player name or re-join code is required.",
+    "landingNeedsSignaling": "Connect to a signaling server to enable Start."
+  },
+  "waiting": {
+    "hostStart": "Waiting for host start",
+    "roundComplete": "Round complete",
+    "noCards": "No cards"
+  }
+}
