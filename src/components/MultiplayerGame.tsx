@@ -148,6 +148,11 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     signalingConnectionStatus,
     connectedSignalingServerUrl,
   );
+  const connectionIndicator = getConnectionIndicatorView(
+    signalingConnectionStatus,
+    connectedSignalingServerUrl,
+    networkStatus,
+  );
   const landingMessage = getLandingMessage(hasLandingStartInput, signalingConnectionStatus, message);
   const roomItems = useMemo(() => rooms.map(toRoomListItem), [rooms]);
 
@@ -879,9 +884,13 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
             <span className="brand__mode">{sceneLabel(currentScene)}</span>
           </div>
         </div>
-        <div className="connection-indicator" aria-label={t('aria.p2pStatus', { status: networkStatus })}>
+        <div
+          className="connection-indicator"
+          aria-label={t('aria.connectionStatus', { status: connectionIndicator.label })}
+          data-status={connectionIndicator.status}
+        >
           <span className="connection-indicator__dot" />
-          {networkStatus}
+          {connectionIndicator.label}
         </div>
       </header>
 
@@ -2274,6 +2283,24 @@ function getSignalingConnectionLabel(
   }
 
   return t('signaling.notConnected');
+}
+
+function getConnectionIndicatorView(
+  status: SignalingConnectionStatus,
+  connectedSignalingServerUrl: string | null,
+  networkStatus: string,
+): { label: string; status: SignalingConnectionStatus } {
+  if (status !== 'connected') {
+    return {
+      label: getSignalingConnectionLabel(status, connectedSignalingServerUrl),
+      status,
+    };
+  }
+
+  return {
+    label: networkStatus === t('network.idle') ? t('signaling.connectedShort') : networkStatus,
+    status,
+  };
 }
 
 function sceneLabel(scene: MultiplayerScene): string {

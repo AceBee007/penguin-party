@@ -94,8 +94,9 @@ placeholder 名は locale 間で同じにし、翻訳文側が語順だけを変
 
 ### 接続状況インジケーター
 
-すべてのゲームシーンの左上に、常時接続状況を表示します。
-対象シーンは `matchmaking_lobby`、`waiting_room`、`game_play`、`round_result`、`game_result` です。
+すべての multiplayer scene の右上に、常時接続状況を表示します。
+対象シーンは `landing_page`、`matchmaking_lobby`、`waiting_room`、`game_play`、`round_result`、`game_result` です。
+`landing_page` では signaling server への接続状態を表示します。
 
 表示内容:
 
@@ -105,10 +106,11 @@ placeholder 名は locale 間で同じにし、翻訳文側が語順だけを変
 
 色の方針:
 
-- 良好: 緑
+- 良好 / signaling server 接続済み: 緑
 - 不安定: 黄〜赤の中間色
-- 切断: 赤
+- 未接続 / 接続失敗: 赤
 - 再接続中: 緑から赤へ向かうグラデーションまたはアニメーション
+- signaling server 接続確認中: 黄
 
 ```ts
 type ConnectionQuality = 'good' | 'unstable' | 'reconnecting' | 'disconnected';
@@ -121,6 +123,7 @@ interface ConnectionIndicatorView {
 }
 ```
 
+`landing_page` で signaling server に未接続の場合、接続状況インジケーターを緑で表示してはいけません。
 `game_play` 中は、他 player の切断を通常 UI に出さないため、`peerCount` / `connectedPeerCount` を player ごとの離脱表示として使ってはいけません。
 表示してよいのは、自分自身の signaling / P2P 接続品質、または room 全体の抽象的な通信状態だけです。
 
@@ -128,7 +131,7 @@ interface ConnectionIndicatorView {
 
 - アイコンは `lucide-react` を導入する場合、`Wifi`, `WifiOff`, `Signal` 系を使う
 - アイコンだけに依存せず、`aria-label` でも接続状態を読めるようにする
-- 左上に固定表示するが、ゲームのカードや重要 UI を隠さない余白を確保する
+- 右上に固定表示するが、ゲームのカードや重要 UI を隠さない余白を確保する
 
 ## 4. Landing Page
 

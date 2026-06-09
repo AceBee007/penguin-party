@@ -4,6 +4,7 @@
   },
   "aria": {
     "activePlayer": "Active player",
+    "connectionStatus": "Connection status: {status}",
     "connectionLocalGood": "Local connection good",
     "expandedScoreboard": "Expanded scoreboard",
     "gameBoard": "Penguin Party game board",
@@ -219,6 +220,7 @@
   },
   "signaling": {
     "connected": "Connected: {url}",
+    "connectedShort": "Connected",
     "connecting": "Connecting...",
     "failed": "Connection failed.",
     "notConnected": "Not connected."

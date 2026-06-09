@@ -4,6 +4,7 @@
   },
   "aria": {
     "activePlayer": "手番のプレイヤー",
+    "connectionStatus": "接続ステータス: {status}",
     "connectionLocalGood": "ローカル接続は良好",
     "expandedScoreboard": "展開されたスコアボード",
     "gameBoard": "ペンギンパーティーのゲーム盤",
@@ -219,6 +220,7 @@
   },
   "signaling": {
     "connected": "接続済み: {url}",
+    "connectedShort": "接続済み",
     "connecting": "接続中...",
     "failed": "接続に失敗しました。",
     "notConnected": "未接続です。"

@@ -47,6 +47,7 @@ describe('App', () => {
     expect(screen.getByLabelText('Signaling server')).toHaveValue(`http://${window.location.hostname}:15201`);
     expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
+    expect(screen.getByLabelText('Connection status: Not connected.')).toHaveAttribute('data-status', 'idle');
   });
 
   it('auto-connects once with the signaling server query', async () => {
@@ -64,6 +65,7 @@ describe('App', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://10.0.0.8:15201/rooms');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled());
     expect(screen.getByText('Connected: http://10.0.0.8:15201')).toBeInTheDocument();
+    expect(screen.getByLabelText('Connection status: Connected')).toHaveAttribute('data-status', 'connected');
   });
 
   it('uses the lang query before cookies for the landing page language', () => {

@@ -162,6 +162,16 @@ button {
   width: 9px;
   height: 9px;
   border-radius: 50%;
+  background: #dc3b45;
+  box-shadow: 0 0 0 4px rgba(220, 59, 69, 0.14);
+}
+
+.connection-indicator[data-status='checking'] .connection-indicator__dot {
+  background: #d69e2e;
+  box-shadow: 0 0 0 4px rgba(214, 158, 46, 0.16);
+}
+
+.connection-indicator[data-status='connected'] .connection-indicator__dot {
   background: #38a169;
   box-shadow: 0 0 0 4px rgba(56, 161, 105, 0.16);
 }
