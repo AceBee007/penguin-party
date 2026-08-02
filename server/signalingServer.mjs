@@ -5,7 +5,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 const HOST = process.env.SIGNALING_HOST?.trim() || '0.0.0.0';
 const PORT = readPort(process.env.SIGNALING_PORT, 15201);
 const MAX_PLAYERS = 6;
-const REJOIN_TTL_MS = 3 * 60 * 60 * 1000;
+const REJOIN_TTL_MS = 30 * 60 * 1000;
 const LOBBY_RESERVATION_TTL_MS = 30 * 1000;
 
 /** @type {Map<string, RoomRecord>} */
@@ -320,6 +320,7 @@ async function routeHttp(request, response) {
   const rejoinCodeMatch = /^\/rooms\/([^/]+)\/rejoin-code$/.exec(url.pathname);
 
   if (request.method === 'POST' && rejoinCodeMatch) {
+    cleanupExpiredRejoinCodes();
     const room = rooms.get(rejoinCodeMatch[1]);
     const body = await readJsonBody(request);
     const peerId = String(body.peerId ?? '').trim();
@@ -336,12 +337,23 @@ async function routeHttp(request, response) {
 
     writeJson(response, 200, {
       rejoinCode: peer.rejoinCode,
-      expiresAt: peer.rejoinCodeExpiresAt,
     });
     return;
   }
 
+  if (request.method === 'POST' && url.pathname === '/rejoin/status') {
+    cleanupExpiredRejoinCodes();
+    const body = await readJsonBody(request);
+    const rejoinCode = String(body.rejoinCode ?? '').trim();
+    const match = findPeerByRejoinCode(rejoinCode);
+    const valid = Boolean(match && isRejoinCodeLive(match.room, match.peer));
+
+    writeJson(response, 200, { valid });
+    return;
+  }
+
   if (request.method === 'POST' && url.pathname === '/rejoin') {
+    cleanupExpiredRejoinCodes();
     const body = await readJsonBody(request);
     const rejoinCode = String(body.rejoinCode ?? '').trim();
     const match = findPeerByRejoinCode(rejoinCode);
@@ -353,13 +365,8 @@ async function routeHttp(request, response) {
 
     const { room, peer } = match;
 
-    if (!peer.rejoinCode || !peer.rejoinCodeExpiresAt || peer.rejoinCodeExpiresAt < Date.now()) {
+    if (!isRejoinCodeLive(room, peer)) {
       clearPeerRejoinCode(peer);
-      writeJoinError(response, { code: 'invalid_rejoin_code', message: 'このrejoin codeは無効' });
-      return;
-    }
-
-    if (room.status !== 'playing') {
       writeJoinError(response, { code: 'invalid_rejoin_code', message: 'このrejoin codeは無効' });
       return;
     }
@@ -394,6 +401,27 @@ async function routeHttp(request, response) {
       joinedAt: peer.joinedAt,
       displayName: peer.displayName,
     });
+    return;
+  }
+
+  const invalidateRejoinCodesMatch = /^\/rooms\/([^/]+)\/rejoin-codes\/invalidate$/.exec(url.pathname);
+
+  if (request.method === 'POST' && invalidateRejoinCodesMatch) {
+    cleanupExpiredRejoinCodes();
+    const room = rooms.get(invalidateRejoinCodesMatch[1]);
+    const body = await readJsonBody(request);
+    const peerId = String(body.peerId ?? '').trim();
+    const signalingToken = String(body.signalingToken ?? '').trim();
+    const peer = room?.peers.get(peerId);
+
+    if (!room || !peer || room.hostPeerId !== peerId || peer.signalingToken !== signalingToken) {
+      writeJson(response, 403, { code: 'unauthorized', message: 'Only the current host can end re-join access.' });
+      return;
+    }
+
+    invalidateRoomRejoinCodes(room);
+    room.updatedAt = Date.now();
+    writeJson(response, 200, { ok: true });
     return;
   }
 
@@ -443,7 +471,6 @@ function createPeer({ displayName, joinedAt, peerId, playerId, role }) {
     role,
     reconnectToken: createId('reconnect'),
     rejoinCode: null,
-    rejoinCodeExpiresAt: null,
     signalingToken: createId('signal'),
     connectionStatus: 'new',
     wsConnectedAt: null,
@@ -594,12 +621,32 @@ function findPeerByRejoinCode(rejoinCode) {
 }
 
 function issueGameRejoinCode(peer) {
-  if (peer.rejoinCode && peer.rejoinCodeExpiresAt && peer.rejoinCodeExpiresAt > Date.now()) {
+  if (peer.rejoinCode && getRejoinCodeExpiresAt(peer.rejoinCode) > Date.now()) {
     return;
   }
 
-  peer.rejoinCode = createRejoinCode();
-  peer.rejoinCodeExpiresAt = Date.now() + REJOIN_TTL_MS;
+  peer.rejoinCode = createRejoinCode(Date.now() + REJOIN_TTL_MS);
+}
+
+function isRejoinCodeLive(room, peer) {
+  const expiresAt = getRejoinCodeExpiresAt(peer.rejoinCode);
+
+  return Boolean(
+    room.status === 'playing' &&
+      peer.rejoinCode &&
+      expiresAt &&
+      expiresAt > Date.now(),
+  );
+}
+
+function cleanupExpiredRejoinCodes(now = Date.now()) {
+  for (const room of rooms.values()) {
+    for (const peer of room.peers.values()) {
+      if (peer.rejoinCode && (getRejoinCodeExpiresAt(peer.rejoinCode) ?? 0) <= now) {
+        clearPeerRejoinCode(peer);
+      }
+    }
+  }
 }
 
 function invalidateRoomRejoinCodes(room) {
@@ -610,7 +657,6 @@ function invalidateRoomRejoinCodes(room) {
 
 function clearPeerRejoinCode(peer) {
   peer.rejoinCode = null;
-  peer.rejoinCodeExpiresAt = null;
 }
 
 function toPeerSummary(peer) {
@@ -699,8 +745,20 @@ function createId(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
-function createRejoinCode() {
-  return crypto.randomBytes(9).toString('base64url');
+function createRejoinCode(expiresAt) {
+  return `${crypto.randomBytes(9).toString('base64url')}.${expiresAt.toString(36)}`;
+}
+
+function getRejoinCodeExpiresAt(rejoinCode) {
+  const segments = String(rejoinCode ?? '').trim().split('.');
+
+  if (segments.length !== 2 || !segments[0] || !/^[0-9a-z]+$/i.test(segments[1])) {
+    return null;
+  }
+
+  const expiresAt = Number.parseInt(segments[1], 36);
+
+  return Number.isSafeInteger(expiresAt) && expiresAt > 0 ? expiresAt : null;
 }
 
 function createPasswordRecord(password) {

@@ -714,6 +714,19 @@ button {
   grid-column: 1 / span 2;
 }
 
+.landing-form__player-name {
+  grid-column: 1 / span 2;
+}
+
+.landing-form__start-button,
+.landing-form__connect-button {
+  grid-column: 3;
+}
+
+.landing-form__rejoin-button {
+  grid-column: 1 / -1;
+}
+
 .landing-form__connect-button {
   min-height: 40px;
 }
@@ -1167,6 +1180,10 @@ button {
     grid-template-columns: 1fr;
   }
 
+  .landing-form__connect-button,
+  .landing-form__player-name,
+  .landing-form__rejoin-button,
+  .landing-form__start-button,
   .signaling-server-field {
     grid-column: auto;
   }

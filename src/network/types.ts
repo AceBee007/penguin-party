@@ -59,7 +59,10 @@ export interface ResumeGameRequest {
 
 export interface RequestRejoinCodeResponse {
   rejoinCode: string;
-  expiresAt: number;
+}
+
+export interface RejoinCodeStatusResponse {
+  valid: boolean;
 }
 
 export interface PlayerNameReservation {

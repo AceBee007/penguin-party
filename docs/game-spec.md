@@ -195,7 +195,6 @@ interface GamePlayerState {
 
   connectionStatus: ConnectionStatus;
   ready: boolean;
-  rejoinCodeExpiresAt?: number;
 
   totalPenalty: number;
   roundsStarted: number[];
@@ -267,19 +266,18 @@ re-join code で復帰する場合は例外です。
 ### Re-join code
 
 player が最初のラウンドに入る時点で、client は signaling server にその game 用の re-join code を要求します。
-re-join code は player identity と game に紐づく secret であり、通常 UI では他 player に見せません。
-有効期限は生成から3時間です。
+re-join code は機密情報ではなく、`randomString.expiryTimestampBase36` 形式で有効期限を code 自体に含めます。
+client は code と server URL を local storage に保存します。
+有効期限は生成から最大30分で、game がそれより早く終了した場合は game 終了時点までです。
+game 終了時に server 側で無効化し、各 client の local storage からも削除します。
 
 ```ts
 interface RejoinIdentity {
-  rejoinCode: string;
+  rejoinCode: `${string}.${string}`;
   playerId: PlayerId;
   roomId: string;
   gameId: GameId | null;
   displayName: string;
-  issuedAt: number;
-  expiresAt: number;
-  consumedAt: number | null;
 }
 ```
 
@@ -287,6 +285,11 @@ re-join code が有効で、対象 game が進行中または復帰可能な状�
 re-join code で復帰する場合、landing page で入力された player name は使いません。
 期限切れ、存在しない、終了済み game、waiting room に戻った game、またはすでに接続中の player の re-join code は拒否します。
 同じ room で次の game を開始する場合、前 game の code は無効化し、新しい code を発行します。
+client の再訪時は code 内の期限を先に確認し、期限内の場合だけ server に問い合わせます。
+期限切れなら server へ問い合わせず local storage から削除します。
+server は次の re-join code 関連操作時に、保持中の期限切れ code を全 room から掃除します。
+server 問い合わせでも有効な場合だけ Landing page に再参加ボタンを表示します。
+code の手入力欄や URL query への埋め込みは行いません。
 
 ## 6. カードデータ
 

@@ -118,11 +118,13 @@ export class PeerMeshClient {
 
   private handleSignalingMessage(message: SignalingServerMessage): void {
     if (message.type === 'hello_ok') {
+      const localPeer = toLocalSummary(this.options.identity);
+
       for (const peer of message.peers) {
         this.peers.set(peer.peerId, peer);
 
-        if (shouldConnectPeers(toLocalSummary(this.options.identity), peer, this.currentHostPeerId)) {
-          void this.ensureConnection(peer, true);
+        if (shouldConnectPeers(localPeer, peer, this.currentHostPeerId)) {
+          void this.ensureConnection(peer, shouldCreateOffer(localPeer, peer));
         }
       }
 
@@ -131,6 +133,7 @@ export class PeerMeshClient {
     }
 
     if (message.type === 'peer_joined') {
+      const localPeer = toLocalSummary(this.options.identity);
       const knownPeerRejoined = this.peers.has(message.peer.peerId);
 
       this.peers.set(message.peer.peerId, message.peer);
@@ -141,8 +144,8 @@ export class PeerMeshClient {
 
       this.publishPeers();
 
-      if (shouldConnectPeers(toLocalSummary(this.options.identity), message.peer, this.currentHostPeerId)) {
-        void this.ensureConnection(message.peer, true);
+      if (shouldConnectPeers(localPeer, message.peer, this.currentHostPeerId)) {
+        void this.ensureConnection(message.peer, shouldCreateOffer(localPeer, message.peer));
       }
       return;
     }

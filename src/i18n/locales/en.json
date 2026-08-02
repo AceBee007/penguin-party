@@ -33,6 +33,7 @@
     "newLocalGame": "New local game",
     "nextRound": "Next round",
     "refresh": "Refresh",
+    "rejoinGame": "Re-join previous game",
     "resolveNoMoves": "Resolve no moves",
     "restoreBoard": "Restore board",
     "maximizeBoard": "Maximize board",
@@ -71,7 +72,6 @@
     "language": "Language",
     "password": "Password",
     "playerName": "Player name",
-    "rejoinCode": "Re-join code",
     "roomName": "Room name",
     "signalingServer": "Signaling server"
   },
@@ -114,7 +114,6 @@
     "peerReady": "Peer is ready.",
     "playerNameUnavailable": "Player name is unavailable.",
     "receivedHostSnapshot": "Received host snapshot.",
-    "rejoinCodeInvalid": "This re-join code is invalid.",
     "rejoinFailed": "Re-join failed.",
     "rejoinIssueFailed": "Could not issue rejoin code.",
     "resumedRoom": "Resumed room {roomId}.",
@@ -138,7 +137,6 @@
     "host": "Host",
     "legal": "Legal",
     "players": "Players",
-    "rejoin": "Rejoin",
     "revision": "Revision",
     "spectators": "Spectators"
   },
@@ -232,7 +230,7 @@
     "roundResult": "Round result"
   },
   "validation": {
-    "landingMissingInput": "Player name or re-join code is required.",
+    "landingMissingInput": "Player name is required.",
     "landingNeedsSignaling": "Connect to a signaling server to enable Start."
   },
   "waiting": {

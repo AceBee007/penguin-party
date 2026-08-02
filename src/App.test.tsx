@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import type { LegalMove } from './game/types';
+import { REJOIN_SESSION_STORAGE_KEY } from './network/rejoinStorage';
 
 vi.mock('./components/PixiDragStage', () => ({
   PixiDragStage: ({
@@ -27,6 +28,7 @@ describe('App', () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
     document.cookie = 'prefered-language=; Max-Age=0; Path=/';
+    window.localStorage.clear();
     window.history.replaceState({}, '', '/');
   });
 
@@ -45,9 +47,65 @@ describe('App', () => {
     expect(screen.getByText('Landing page')).toBeInTheDocument();
     expect((screen.getByLabelText('Player name') as HTMLInputElement).value).toMatch(/^Player_[0-9a-f]{6}$/);
     expect(screen.getByLabelText('Signaling server')).toHaveValue(`http://${window.location.hostname}:15201`);
+    expect(screen.queryByLabelText('Re-join code')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Re-join previous game' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
     expect(screen.getByLabelText('Connection status: Not connected.')).toHaveAttribute('data-status', 'idle');
+  });
+
+  it('shows re-join only after a stored session is validated', async () => {
+    const signalingServerUrl = 'http://10.0.0.9:15201';
+    window.localStorage.setItem(REJOIN_SESSION_STORAGE_KEY, JSON.stringify({
+      rejoinCode: rejoinCode(Date.now() + 30_000, 'stored-code'),
+      signalingServerUrl,
+    }));
+    const fetchMock = vi.fn().mockImplementation(async (input: string | URL | Request) => ({
+      ok: true,
+      json: async () => String(input).endsWith('/rejoin/status') ? { valid: true } : { rooms: [] },
+      status: 200,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    expect(screen.queryByRole('button', { name: 'Re-join previous game' })).not.toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`${signalingServerUrl}/rejoin/status`, expect.anything()));
+    expect(screen.getByRole('button', { name: 'Re-join previous game' })).toBeEnabled();
+  });
+
+  it('removes an invalid stored re-join session without showing a button', async () => {
+    const signalingServerUrl = 'http://10.0.0.10:15201';
+    window.localStorage.setItem(REJOIN_SESSION_STORAGE_KEY, JSON.stringify({
+      rejoinCode: rejoinCode(Date.now() + 30_000, 'invalid-code'),
+      signalingServerUrl,
+    }));
+    const fetchMock = vi.fn().mockImplementation(async (input: string | URL | Request) => ({
+      ok: true,
+      json: async () => String(input).endsWith('/rejoin/status') ? { valid: false } : { rooms: [] },
+      status: 200,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(window.localStorage.getItem(REJOIN_SESSION_STORAGE_KEY)).toBeNull());
+    expect(screen.queryByRole('button', { name: 'Re-join previous game' })).not.toBeInTheDocument();
+  });
+
+  it('removes a locally expired re-join code without contacting the server', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    window.localStorage.setItem(REJOIN_SESSION_STORAGE_KEY, JSON.stringify({
+      rejoinCode: rejoinCode(Date.now() - 1, 'expired-code'),
+      signalingServerUrl: 'http://10.0.0.11:15201',
+    }));
+
+    render(<App />);
+
+    expect(window.localStorage.getItem(REJOIN_SESSION_STORAGE_KEY)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Re-join previous game' })).not.toBeInTheDocument();
   });
 
   it('auto-connects once with the signaling server query', async () => {
@@ -127,3 +185,7 @@ describe('App', () => {
     expect(container.querySelector('[data-board-count]')).toHaveTextContent('1');
   });
 });
+
+function rejoinCode(expiresAt: number, random: string): string {
+  return `${random}.${expiresAt.toString(36)}`;
+}

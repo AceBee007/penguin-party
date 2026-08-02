@@ -288,6 +288,8 @@ GET  /rooms
 POST /rooms
 POST /rooms/:roomId/join
 POST /rooms/:roomId/rejoin-code
+POST /rooms/:roomId/rejoin-codes/invalidate
+POST /rejoin/status
 POST /rejoin
 ```
 
@@ -350,7 +352,6 @@ interface RequestRejoinCodeRequest {
 
 interface RequestRejoinCodeResponse {
   rejoinCode: string;
-  expiresAt: number;
 }
 ```
 
@@ -359,9 +360,14 @@ interface RequestRejoinCodeResponse {
 - `RoomMetadata.status === 'playing'` の room でのみ発行する
 - spectator には発行しない
 - room が `playing` へ変わるたび、前 game の re-join code はすべて無効化し、新しい game 用 code を発行する
-- room が `waiting_for_start` へ戻るとき、全 re-join code を無効化する
-- client は発行された code を page URL の `rejoin` query に入れる
-- `rejoin` query 付き URL を開いた client は、signaling server 接続後に `POST /rejoin` を試みる
+- code は `randomString.expiryTimestampBase36` 形式とし、発行から30分の絶対期限を code 自体に含める
+- game が終了した時点で host は `/rooms/:roomId/rejoin-codes/invalidate` を呼び、全 code を無効化する
+- room が `waiting_for_start` へ戻るときも、全 re-join code を無効化する
+- client は発行された code と signaling server URL を local storage に保存する
+- 再訪時は code 内の期限を client で確認し、期限切れなら server へ問い合わせず code を削除する
+- 期限内の場合だけ保存済み server の `/rejoin/status` で有効性を確認し、有効な場合だけ再参加ボタンを表示する
+- server は re-join code の発行・状態確認・再参加・無効化操作の直前に、全 room の期限切れまたは不正形式 code を掃除する
+- 再参加ボタンを押したときだけ `POST /rejoin` を実行する
 - code に紐づく player がすでに接続中の場合、server は re-join を拒否する
 - code が存在しない、期限切れ、別 game の code、または無効化済みの場合、server は `invalid_rejoin_code` として拒否する
 

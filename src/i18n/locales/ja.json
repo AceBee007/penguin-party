@@ -33,6 +33,7 @@
     "newLocalGame": "新しいローカルゲーム",
     "nextRound": "次のラウンド",
     "refresh": "更新",
+    "rejoinGame": "前のゲームに再参加",
     "resolveNoMoves": "手なしを解決",
     "restoreBoard": "盤面を戻す",
     "maximizeBoard": "盤面を最大化",
@@ -71,7 +72,6 @@
     "language": "言語",
     "password": "パスワード",
     "playerName": "プレイヤー名",
-    "rejoinCode": "再参加コード",
     "roomName": "ルーム名",
     "signalingServer": "シグナリングサーバー"
   },
@@ -114,7 +114,6 @@
     "peerReady": "ピアの準備が完了しました。",
     "playerNameUnavailable": "このプレイヤー名は使用できません。",
     "receivedHostSnapshot": "ホストのスナップショットを受信しました。",
-    "rejoinCodeInvalid": "この再参加コードは無効です。",
     "rejoinFailed": "再参加に失敗しました。",
     "rejoinIssueFailed": "再参加コードを発行できませんでした。",
     "resumedRoom": "ルーム {roomId} に復帰しました。",
@@ -138,7 +137,6 @@
     "host": "ホスト",
     "legal": "合法手",
     "players": "プレイヤー",
-    "rejoin": "再参加",
     "revision": "リビジョン",
     "spectators": "観戦者"
   },
@@ -232,7 +230,7 @@
     "roundResult": "ラウンド結果"
   },
   "validation": {
-    "landingMissingInput": "プレイヤー名または再参加コードが必要です。",
+    "landingMissingInput": "プレイヤー名が必要です。",
     "landingNeedsSignaling": "開始するにはシグナリングサーバーへ接続してください。"
   },
   "waiting": {

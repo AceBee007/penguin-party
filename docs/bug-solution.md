@@ -99,12 +99,15 @@
 
 ## Re-join code
 
-- player がゲームに参加した時点で、server はランダムな re-join code を自動生成する。
-- re-join code の有効期限は生成から3時間。
+- player がゲームを開始した時点で、server はランダムな re-join code を自動生成する。
+- re-join code は `randomString.expiryTimestampBase36` 形式で生成し、有効期限を code 自体に含める。
+- 有効期限は生成から最大30分で、game が先に終了した場合はその時点で無効化する。
 - re-join code は player identity に紐づき、room / game が進行中の場合に同じ player として復帰するために使う。
-- Landing page には player name の下に re-join code 入力欄を表示する。
-- re-join code が有効で、進行中 game の player と一致した場合、入力された player name は無視し、以前の display name と playerId で game に resume する。
-- 期限切れ、存在しない、または終了済み game の re-join code は拒否し、Landing page にエラーを表示する。
+- client は再訪時に code 内の期限を確認し、期限切れなら server へ問い合わせず削除する。期限内の場合だけ server へ有効性を問い合わせる。
+- server は次の re-join code 操作時に、全 room の期限切れ code を掃除する。
+- 有効な code がある場合だけ Landing page に再参加ボタンを表示し、押下時に以前の display name と playerId で game に resume する。
+- 手入力欄は表示せず、期限切れ、存在しない、または終了済み game の code では再参加ボタンを表示しない。
+- game 終了時に local storage の code を削除し、次の game 開始時に新しい code を保存する。
 
 ## 検証
 

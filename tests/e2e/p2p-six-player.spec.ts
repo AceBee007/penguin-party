@@ -226,7 +226,7 @@ async function enterMatchmaking(page: Page, name: string) {
 
 async function connectSignalingServer(page: Page) {
   await expect(page.getByRole('button', { name: 'Start' })).toBeDisabled();
-  await page.getByRole('button', { name: '接続' }).click();
+  await page.locator('[data-connect-signaling]').click();
   await expect(page.locator('[data-signaling-status]')).toContainText('Connected', { timeout: 15000 });
   await expect(page).toHaveURL(/signaling-server=/);
   await expect(page.getByRole('button', { name: 'Start' })).toBeEnabled();

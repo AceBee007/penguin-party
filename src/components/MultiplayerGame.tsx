@@ -17,12 +17,12 @@ import type { CardId, GameSessionState, MoveTarget, PlayerId, RoundPlayerState }
 import { electNextHostPeerId } from '../network/hostElection';
 import { PeerMeshClient } from '../network/peerMesh';
 import {
+  checkRejoinCode,
   checkSignalingServer,
-  clearRejoinCodeQuery,
   createRoom,
-  getRejoinCodeQuery,
   getSignalingHttpUrl,
   getSignalingServerQueryUrl,
+  invalidateGameRejoinCodes,
   JoinRoomFailure,
   joinRoom,
   listRooms,
@@ -32,10 +32,16 @@ import {
   requestGameRejoinCode,
   releasePlayerNameReservation,
   resumeGame,
-  setRejoinCodeQuery,
   setSignalingServerQuery,
   validatePlayerName,
 } from '../network/signalingClient';
+import {
+  clearStoredRejoinSession,
+  getRejoinCodeExpiresAt,
+  readStoredRejoinSession,
+  storeRejoinSession,
+  type StoredRejoinSession,
+} from '../network/rejoinStorage';
 import {
   cardColorLabel,
   peerConnectionStatusLabel,
@@ -66,7 +72,6 @@ const AUTO_PLAY_DISCONNECTED_MIN_MS = 5000;
 const AUTO_PLAY_DISCONNECTED_JITTER_MS = 3000;
 
 let autoSignalingConnectAttemptedUrl: string | null = null;
-let autoRejoinAttemptedKey: string | null = null;
 
 type MultiplayerScene =
   | 'landing_page'
@@ -102,8 +107,14 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
   const [game, setGame] = useState<GameSessionState | null>(null);
   const [peers, setPeers] = useState<PeerRuntimeView[]>([]);
   const [playerName, setPlayerName] = useState(() => readStoredPlayerName());
-  const [rejoinCode, setRejoinCode] = useState('');
-  const [signalingServerUrl, setSignalingServerUrl] = useState(() => getSignalingHttpUrl());
+  const [storedRejoinSession, setStoredRejoinSession] = useState<StoredRejoinSession | null>(() =>
+    readStoredRejoinSession(),
+  );
+  const [isStoredRejoinAvailable, setIsStoredRejoinAvailable] = useState(false);
+  const [isRejoining, setIsRejoining] = useState(false);
+  const [signalingServerUrl, setSignalingServerUrl] = useState(
+    () => getSignalingServerQueryUrl() ?? storedRejoinSession?.signalingServerUrl ?? getSignalingHttpUrl(),
+  );
   const [connectedSignalingServerUrl, setConnectedSignalingServerUrl] = useState<string | null>(null);
   const [signalingConnectionStatus, setSignalingConnectionStatus] =
     useState<SignalingConnectionStatus>('idle');
@@ -137,11 +148,11 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
   const eventSeqRef = useRef(0);
   const autoPlayTimeoutRef = useRef<number | null>(null);
   const autoPlayScheduleRef = useRef<{ playerId: PlayerId; revision: number } | null>(null);
+  const invalidatedRejoinGameIdRef = useRef<string | null>(null);
   const lastRoomLeaveAtRef = useRef(0);
   const trimmedPlayerName = playerName.trim();
-  const trimmedRejoinCode = rejoinCode.trim();
   const isPlayerNameValid = trimmedPlayerName.length > 0 && trimmedPlayerName.length <= 16;
-  const hasLandingStartInput = isPlayerNameValid || trimmedRejoinCode.length > 0;
+  const hasLandingStartInput = isPlayerNameValid;
   const canStartLanding = hasLandingStartInput && signalingConnectionStatus === 'connected';
   const canConnectSignalingServer = signalingServerUrl.trim().length > 0 && signalingConnectionStatus !== 'checking';
   const signalingConnectionLabel = getSignalingConnectionLabel(
@@ -279,15 +290,85 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
   }, [signalingServerUrl]);
 
   useEffect(() => {
-    const querySignalingServerUrl = getSignalingServerQueryUrl();
-
-    if (!querySignalingServerUrl || autoSignalingConnectAttemptedUrl === querySignalingServerUrl) {
+    if (identity || scene !== 'landing_page') {
       return;
     }
 
-    autoSignalingConnectAttemptedUrl = querySignalingServerUrl;
+    const autoConnectUrl = getSignalingServerQueryUrl() ?? storedRejoinSession?.signalingServerUrl ?? null;
+
+    if (!autoConnectUrl || autoSignalingConnectAttemptedUrl === autoConnectUrl) {
+      return;
+    }
+
+    autoSignalingConnectAttemptedUrl = autoConnectUrl;
     void handleConnectSignalingServer();
-  }, [handleConnectSignalingServer]);
+  }, [handleConnectSignalingServer, identity, scene, storedRejoinSession?.signalingServerUrl]);
+
+  useEffect(() => {
+    if (identity || scene !== 'landing_page' || !storedRejoinSession || !connectedSignalingServerUrl) {
+      setIsStoredRejoinAvailable(false);
+      return undefined;
+    }
+
+    if (storedRejoinSession.signalingServerUrl !== connectedSignalingServerUrl) {
+      setIsStoredRejoinAvailable(false);
+      return undefined;
+    }
+
+    const expiresAt = getRejoinCodeExpiresAt(storedRejoinSession.rejoinCode);
+
+    if (expiresAt === null || expiresAt <= Date.now()) {
+      clearStoredRejoinSession(storedRejoinSession.rejoinCode);
+      setStoredRejoinSession(null);
+      setIsStoredRejoinAvailable(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    let expiryTimeoutId: number | null = null;
+    setIsStoredRejoinAvailable(false);
+
+    void checkRejoinCode({ rejoinCode: storedRejoinSession.rejoinCode }, connectedSignalingServerUrl)
+      .then(({ valid }) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (valid) {
+          const remainingMs = expiresAt - Date.now();
+
+          if (remainingMs <= 0) {
+            clearStoredRejoinSession(storedRejoinSession.rejoinCode);
+            setStoredRejoinSession(null);
+            return;
+          }
+
+          setIsStoredRejoinAvailable(true);
+          expiryTimeoutId = window.setTimeout(() => {
+            clearStoredRejoinSession(storedRejoinSession.rejoinCode);
+            setStoredRejoinSession(null);
+            setIsStoredRejoinAvailable(false);
+          }, remainingMs);
+          return;
+        }
+
+        clearStoredRejoinSession(storedRejoinSession.rejoinCode);
+        setStoredRejoinSession(null);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setIsStoredRejoinAvailable(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+
+      if (expiryTimeoutId !== null) {
+        window.clearTimeout(expiryTimeoutId);
+      }
+    };
+  }, [connectedSignalingServerUrl, identity, scene, storedRejoinSession]);
 
   useEffect(() => {
     if (identity || scene !== 'matchmaking_lobby') {
@@ -468,6 +549,35 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
   }, [currentReadyGate, isHost, readyGatePlayerIds, readyGateRemainingCount]);
 
   useEffect(() => {
+    if (game?.status !== 'game_result') {
+      return;
+    }
+
+    const currentIdentity = identityRef.current;
+    clearStoredRejoinSession();
+    setStoredRejoinSession(null);
+    setIsStoredRejoinAvailable(false);
+
+    if (currentIdentity?.rejoinCode) {
+      const nextIdentity = { ...currentIdentity, rejoinCode: undefined };
+      identityRef.current = nextIdentity;
+      setIdentity(nextIdentity);
+    }
+
+    if (
+      currentIdentity &&
+      connectedSignalingServerUrl &&
+      currentIdentity.peerId === hostPeerId &&
+      invalidatedRejoinGameIdRef.current !== game.gameId
+    ) {
+      invalidatedRejoinGameIdRef.current = game.gameId;
+      void invalidateGameRejoinCodes(currentIdentity, connectedSignalingServerUrl).catch(() => {
+        invalidatedRejoinGameIdRef.current = null;
+      });
+    }
+  }, [connectedSignalingServerUrl, game?.gameId, game?.status, hostPeerId]);
+
+  useEffect(() => {
     if (!isBoardMaximized) {
       return undefined;
     }
@@ -612,19 +722,6 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       return;
     }
 
-    if (trimmedRejoinCode) {
-      try {
-        const nextIdentity = await resumeGame({ rejoinCode: trimmedRejoinCode }, connectedSignalingServerUrl);
-        setPlayerName(nextIdentity.displayName);
-        setRejoinCode('');
-        setMessage(t('message.resumedRoom', { roomId: nextIdentity.room.roomId }));
-        startMesh(nextIdentity);
-      } catch (error) {
-        setMessage(error instanceof Error ? error.message : t('message.rejoinFailed'));
-      }
-      return;
-    }
-
     if (!isPlayerNameValid) {
       return;
     }
@@ -643,43 +740,33 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t('message.playerNameUnavailable'));
     }
-  }, [
-    connectedSignalingServerUrl,
-    isPlayerNameValid,
-    refreshOpenRooms,
-    startMesh,
-    trimmedPlayerName,
-    trimmedRejoinCode,
-  ]);
+  }, [connectedSignalingServerUrl, isPlayerNameValid, refreshOpenRooms, trimmedPlayerName]);
 
-  useEffect(() => {
-    const rejoinCodeFromQuery = getRejoinCodeQuery();
-
-    if (!connectedSignalingServerUrl || !rejoinCodeFromQuery) {
+  const handleRejoinGame = useCallback(async () => {
+    if (!connectedSignalingServerUrl || !storedRejoinSession || !isStoredRejoinAvailable) {
       return;
     }
 
-    const attemptKey = `${connectedSignalingServerUrl}|${rejoinCodeFromQuery}`;
+    setIsRejoining(true);
 
-    if (autoRejoinAttemptedKey === attemptKey) {
-      return;
+    try {
+      const nextIdentity = await resumeGame(
+        { rejoinCode: storedRejoinSession.rejoinCode },
+        connectedSignalingServerUrl,
+      );
+      setPlayerName(nextIdentity.displayName);
+      setIsStoredRejoinAvailable(false);
+      setMessage(t('message.resumedRoom', { roomId: nextIdentity.room.roomId }));
+      startMesh(nextIdentity);
+    } catch (error) {
+      clearStoredRejoinSession(storedRejoinSession.rejoinCode);
+      setStoredRejoinSession(null);
+      setIsStoredRejoinAvailable(false);
+      setMessage(error instanceof Error ? error.message : t('message.rejoinFailed'));
+    } finally {
+      setIsRejoining(false);
     }
-
-    autoRejoinAttemptedKey = attemptKey;
-    setRejoinCode(rejoinCodeFromQuery);
-    void (async () => {
-      try {
-        const nextIdentity = await resumeGame({ rejoinCode: rejoinCodeFromQuery }, connectedSignalingServerUrl);
-        setPlayerName(nextIdentity.displayName);
-        setRejoinCode('');
-        setMessage(t('message.resumedRoom', { roomId: nextIdentity.room.roomId }));
-        setRejoinCodeQuery(rejoinCodeFromQuery);
-        startMesh(nextIdentity);
-      } catch (error) {
-        setMessage(error instanceof Error ? error.message : t('message.rejoinCodeInvalid'));
-      }
-    })();
-  }, [connectedSignalingServerUrl, startMesh]);
+  }, [connectedSignalingServerUrl, isStoredRejoinAvailable, startMesh, storedRejoinSession]);
 
   const handleCreateRoom = useCallback(async () => {
     if (!isPlayerNameValid) {
@@ -793,7 +880,6 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     gameRef.current = null;
     hostPeerIdRef.current = null;
     eventSeqRef.current = 0;
-    clearRejoinCodeQuery();
     setIdentity(null);
     setGame(null);
     setPeers([]);
@@ -902,7 +988,7 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
             <LanguageSelector />
           </div>
           <div className="landing-form">
-            <label className="player-name-field">
+            <label className="player-name-field landing-form__player-name">
               {t('field.playerName')}
               <input
                 data-player-name
@@ -916,23 +1002,25 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
                 }}
               />
             </label>
-            <label className="player-name-field">
-              {t('field.rejoinCode')}
-              <input
-                data-rejoin-code-input
-                value={rejoinCode}
-                maxLength={32}
-                onChange={(event) => setRejoinCode(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && canStartLanding) {
-                    void handleEnterMatchmaking();
-                  }
-                }}
-              />
-            </label>
-            <button type="button" disabled={!canStartLanding} onClick={() => void handleEnterMatchmaking()}>
+            <button
+              className="landing-form__start-button"
+              type="button"
+              disabled={!canStartLanding}
+              onClick={() => void handleEnterMatchmaking()}
+            >
               {t('button.start')}
             </button>
+            {isStoredRejoinAvailable ? (
+              <button
+                className="landing-form__rejoin-button"
+                data-rejoin-game
+                type="button"
+                disabled={isRejoining}
+                onClick={() => void handleRejoinGame()}
+              >
+                {t('button.rejoinGame')}
+              </button>
+            ) : null}
             <label className="player-name-field signaling-server-field">
               {t('field.signalingServer')}
               <input
@@ -948,6 +1036,7 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
             </label>
             <button
               className="landing-form__connect-button"
+              data-connect-signaling
               type="button"
               disabled={!canConnectSignalingServer}
               onClick={() => void handleConnectSignalingServer()}
@@ -1353,17 +1442,10 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
                 <span>{t('metric.players')}</span>
                 <strong data-player-count>{playerCount}</strong>
               </div>
-              {!game ? (
-                <div>
-                  <span>{t('metric.connected')}</span>
-                  <strong data-connected-count>{connectedPeerCount}</strong>
-                </div>
-              ) : (
-                <div>
-                  <span>{t('metric.rejoin')}</span>
-                  <strong data-rejoin-code>{identity.rejoinCode ?? t('common.none')}</strong>
-                </div>
-              )}
+              <div>
+                <span>{t('metric.connected')}</span>
+                <strong data-connected-count>{connectedPeerCount}</strong>
+              </div>
               <div>
                 <span>{t('metric.spectators')}</span>
                 <strong data-spectator-count>{spectatorCount}</strong>
@@ -1648,7 +1730,10 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     }
 
     try {
-      const { rejoinCode: nextRejoinCode } = await requestGameRejoinCode(currentIdentity, connectedSignalingServerUrl);
+      const { rejoinCode: nextRejoinCode } = await requestGameRejoinCode(
+        currentIdentity,
+        connectedSignalingServerUrl,
+      );
 
       if (identityRef.current?.peerId !== currentIdentity.peerId) {
         return currentIdentity;
@@ -1658,9 +1743,15 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
         ...identityRef.current,
         rejoinCode: nextRejoinCode,
       };
+      const nextStoredRejoinSession = {
+        rejoinCode: nextRejoinCode,
+        signalingServerUrl: connectedSignalingServerUrl,
+      };
       identityRef.current = nextIdentity;
+      storeRejoinSession(nextStoredRejoinSession);
+      setStoredRejoinSession(nextStoredRejoinSession);
+      setIsStoredRejoinAvailable(false);
       setIdentity(nextIdentity);
-      setRejoinCodeQuery(nextRejoinCode);
       return nextIdentity;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t('message.rejoinIssueFailed'));
@@ -1706,7 +1797,9 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     gameRef.current = null;
     hostPeerIdRef.current = nextHostPeerId;
     meshRef.current?.setHostPeerId(nextHostPeerId);
-    clearRejoinCodeQuery();
+    clearStoredRejoinSession();
+    setStoredRejoinSession(null);
+    setIsStoredRejoinAvailable(false);
     setIdentity(waitingIdentity);
     setGame(null);
     setHostPeerId(nextHostPeerId);

@@ -25,7 +25,7 @@ test('syncs one host move and one joiner move over WebRTC DataChannel', async ({
     await expect(peerB.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
     await expect(peerA.page.locator('[data-player-count]')).toHaveText('2');
     await peerA.page.locator('[data-ready-toggle]').click();
-    await expect(peerA.page.locator('[data-ready-status]')).toContainText('準備未完了はあと1名');
+    await expect(peerA.page.locator('[data-ready-status]')).toContainText(/1(?: not ready|名)/);
     await expectAllowsFullText(peerA.page.locator('[data-ready-status]'));
     await expect(peerA.page.locator('canvas')).toHaveCount(0);
     await peerB.page.locator('[data-ready-toggle]').click();
@@ -452,7 +452,6 @@ test('resumes a disconnected player with a re-join code', async ({ browser }, te
   const names = peerNames('Rejoin', testInfo.project.name, 2);
   const peerA = await openPeer(browser, { width: 1280, height: 720 });
   const peerB = await openPeer(browser, { width: 1280, height: 720 });
-  const peerBResume = await openPeer(browser, { width: 1280, height: 720 });
 
   try {
     await peerA.page.goto('/');
@@ -470,33 +469,35 @@ test('resumes a disconnected player with a re-join code', async ({ browser }, te
     await joinRoomFromList(peerB.page, roomId);
     await expect(peerA.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
     await readyPlayers(peerA.page, peerB.page);
-    await expect(peerB.page.locator('[data-rejoin-code]')).not.toHaveText('none');
-    const rejoinCode = (await peerB.page.locator('[data-rejoin-code]').textContent())?.trim();
-    const rejoinUrl = peerB.page.url();
-
-    if (!rejoinCode || !new URL(rejoinUrl).searchParams.get('rejoin')) {
-      throw new Error('Peer B did not receive a re-join code.');
-    }
-
-    await peerBResume.page.goto(rejoinUrl);
-    await expect(peerBResume.page.locator('[data-game-message]')).toContainText('このrejoin codeは無効', {
-      timeout: 15000,
+    await expect(peerB.page.locator('[data-rejoin-code-input]')).toHaveCount(0);
+    await expect(peerB.page.locator('[data-rejoin-code]')).toHaveCount(0);
+    await expect.poll(() => getStoredRejoinSession(peerB.page), { timeout: 15000 }).not.toBeNull();
+    const storedSession = await peerB.page.evaluate(() => {
+      const raw = window.localStorage.getItem('penguin-party.rejoinSession');
+      return raw ? JSON.parse(raw) as { rejoinCode: string; signalingServerUrl: string } : null;
     });
-    await expect(peerBResume.page.locator('[data-room-list]')).toHaveCount(0);
+    const expiresAt = Number.parseInt(storedSession?.rejoinCode.split('.')[1] ?? '', 36);
 
-    await peerB.context.close();
-    await peerBResume.page.goto(rejoinUrl);
+    expect(storedSession?.rejoinCode).toBeTruthy();
+    expect(expiresAt).toBeGreaterThan(Date.now());
+    expect(expiresAt).toBeLessThanOrEqual(Date.now() + 30 * 60 * 1000);
+    expect(new URL(peerB.page.url()).searchParams.get('rejoin')).toBeNull();
 
-    await expect.poll(() => getLocalPlayerName(peerBResume.page), { timeout: 15000 }).toBe(names[1]);
-    await expect.poll(() => getStateHash(peerBResume.page), { timeout: 30000 }).not.toBe('none');
-    await expectLocalPlayerHasMatchingGameState(peerBResume.page, names[1]);
+    await peerB.page.reload();
+    await expect(peerB.page.locator('[data-rejoin-game]')).toBeVisible({ timeout: 15000 });
+    expect(await getLocalPlayerName(peerB.page)).toBe('none');
+    await peerB.page.locator('[data-rejoin-game]').click();
+
+    await expect.poll(() => getLocalPlayerName(peerB.page), { timeout: 15000 }).toBe(names[1]);
+    await expect.poll(() => getStateHash(peerB.page), { timeout: 30000 }).not.toBe('none');
+    await expectLocalPlayerHasMatchingGameState(peerB.page, names[1]);
 
     expect(peerA.consoleErrors).toEqual([]);
-    expect(peerBResume.consoleErrors).toEqual([]);
+    expect(peerB.consoleErrors).toEqual([]);
     expect(peerA.failedRequests).toEqual([]);
-    expect(peerBResume.failedRequests).toEqual([]);
+    expect(peerB.failedRequests).toEqual([]);
   } finally {
-    await Promise.allSettled([peerA.context.close(), peerB.context.close(), peerBResume.context.close()]);
+    await Promise.allSettled([peerA.context.close(), peerB.context.close()]);
   }
 });
 
@@ -573,7 +574,7 @@ async function enterMatchmaking(page: Page, name: string) {
 
 async function connectSignalingServer(page: Page) {
   await expect(page.getByRole('button', { name: 'Start' })).toBeDisabled();
-  await page.getByRole('button', { name: '接続' }).click();
+  await page.locator('[data-connect-signaling]').click();
   await expect(page.locator('[data-signaling-status]')).toContainText('Connected', { timeout: 15000 });
   await expect(page).toHaveURL(/signaling-server=/);
   await expect(page.getByRole('button', { name: 'Start' })).toBeEnabled();
@@ -655,6 +656,10 @@ async function getStateHash(page: Page) {
 
     return debug?.game?.stateHash ?? 'none';
   });
+}
+
+async function getStoredRejoinSession(page: Page) {
+  return page.evaluate(() => window.localStorage.getItem('penguin-party.rejoinSession'));
 }
 
 async function expectLocalPlayerHasMatchingGameState(page: Page, expectedName: string) {

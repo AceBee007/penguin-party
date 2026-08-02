@@ -138,8 +138,8 @@ interface ConnectionIndicatorView {
 ### 目的
 
 起動直後に表示する最初の画面です。
-ゲームタイトル、プレイヤー名設定、re-join code、signaling server 接続欄、「Start」ボタンを表示し、room 一覧は表示しません。
-プレイ中 game へ復帰するため、プレイヤー名入力の下に re-join code 入力欄も表示します。
+ゲームタイトル、プレイヤー名設定、signaling server 接続欄、「Start」ボタンを表示し、room 一覧は表示しません。
+local storage に有効な re-join code がある場合だけ、「前のゲームに再参加」ボタンも表示します。
 
 ### レイアウト
 
@@ -147,9 +147,7 @@ interface ConnectionIndicatorView {
                                       [Language v]
 Penguin Party
 [Player_a3f91c____________]
-[re-join code_____________]
-
-[Start]
+[Start] [前のゲームに再参加（有効な場合のみ）]
 
 [http://127.0.0.1:15201____] [接続]
 ```
@@ -191,7 +189,7 @@ locale 決定優先度:
 
 - ユーザーが pulldown で locale を選択したら、まず `prefered-language` cookie に locale code を保存する
 - 手動選択時に URL query に `lang` が存在する場合は、cookie 保存後に `lang` query pair を URL から削除する
-- `lang` query を削除しても他の query (`signaling-server`、`rejoin` など) は保持する
+- `lang` query を削除しても他の query (`signaling-server` など) は保持する
 - 選択後、React DOM と PixiJS canvas 内の固定表示文言を選択 locale の辞書で再表示する
 
 ### プレイヤー名入力
@@ -229,13 +227,12 @@ Validation:
 
 - `接続`: signaling server 欄の URL へ接続確認を行う
 - `Start`: プレイヤー名が valid かつ signaling server への接続確認が成功済みなら `matchmaking_lobby` へ遷移する
-- re-join code が入力されている場合、`Start` は名前ではなく re-join code による resume を優先する
-- re-join code resume が成功した場合、保存済み player name、playerId、手札、手番状態で `game_play` へ遷移する
-- re-join code resume が失敗した場合、Landing page にエラーを表示し、入力中の player name は変更しない
+- `前のゲームに再参加`: 保存済み code が server で有効と確認できた場合だけ表示し、押下時に以前の player name、playerId、手札、手番状態で `game_play` へ遷移する
+- re-join に失敗した場合は保存済み code を削除し、ボタンを非表示にする
 
 ### Signaling server 入力
 
-player name、re-join code、Start の下に表示します。
+player name、Start の下に表示します。
 
 ```ts
 interface SignalingServerInputView {
@@ -256,46 +253,30 @@ interface SignalingServerInputView {
 - ユーザーが接続成功後に signaling server 欄を編集した場合、接続状態を未接続に戻し、再度 `接続` が成功するまで `Start` を disabled にする
 - 接続成功した signaling server URL は、現在の page URL の `signaling-server` query に反映する
 
-### Re-join code 入力
+### Re-join session
 
-進行中 game から切断された player が、同じ player として復帰するための入力欄です。
+進行中 game から切断された player が、同じ player として復帰するための client-side session です。
 
 ```ts
-interface RejoinCodeInputView {
-  value: string;
-  isSubmitting: boolean;
-  error:
-    | 'invalid_rejoin_code'
-    | 'expired_rejoin_code'
-    | 'game_already_finished'
-    | 'room_closed'
-    | null;
+interface StoredRejoinSession {
+  rejoinCode: string;
+  signalingServerUrl: string;
 }
 ```
 
-表示ルール:
+保存・表示ルール:
 
-- player name 入力欄の下に表示する
-- placeholder は `re-join code` とする
-- 任意入力にする
-- re-join code が空欄の場合、通常の player name flow を使う
-- re-join code が入力済みの場合、player name の値は resume 判定に使わない
-- resume 成功後、UI 上の player name は server が返した以前の display name に置き換える
-- re-join code は secret なので、他 player の画面、room list、waiting room、game play には表示しない
-
-### Re-join URL query
-
-ゲーム開始時、各 player は signaling server からその game 用の re-join code を受け取り、現在の URL に `rejoin` query として追加します。
-
-表示・遷移ルール:
-
-- `rejoin` query は最初のラウンドへ入った時点で追加する
-- `waiting_room` / `waiting_for_start` に戻った時点で、client は `rejoin` query を URL から削除する
-- `rejoin` query 付き URL で Landing page を開いた場合、signaling server 接続後に自動で resume を試みる
-- resume 成功時は Landing page / matchmaking lobby を経由せず、該当 player として進行中 game へ直接復帰する
-- re-join code に紐づく player がすでに接続中の場合、Landing page に `このrejoin codeは無効` と表示する
-- re-join code が server side で無効化済み、期限切れ、存在しない場合も、Landing page に `このrejoin codeは無効` と表示する
-- 同じ room が次の game を始める場合、前 game の re-join code は使わず、新しい code を発行し直す
+- 最初のラウンドへ入った時点で、各 player client は signaling server から game 用 code を受け取り local storage に保存する
+- code は `randomString.expiryTimestampBase36` 形式で最大30分の期限を自身に含み、game が先に終了した場合は game 終了時点までとする
+- 再訪時は code 内の期限を先に確認し、期限切れなら server へ接続せず local storage から削除する
+- 期限内の場合だけ保存済み signaling server へ自動接続し、code の有効性を問い合わせる
+- code が有効な場合だけ Landing page に「前のゲームに再参加」ボタンを表示する
+- code がない、local expiry 済み、または server side で無効な場合はボタンを表示せず、無効な保存値を削除する
+- ボタン押下時だけ resume を実行し、成功時は以前の display name、playerId、hand、現在の game state を復元する
+- game 終了時または `waiting_room` / `waiting_for_start` に戻った時点で local storage から削除する
+- 同じ room が次の game を始める場合、前 game の code は使わず、新しい code を発行して保存し直す
+- code の手入力欄や `rejoin` URL query は使用しない
+- re-join code は機密情報ではないが内部識別子なので、通常の画面には表示しない
 
 ## 5. Matchmaking Lobby
 
@@ -1109,11 +1090,11 @@ interface FinalStandingView {
 ### Re-join code で resume
 
 1. 起動時に `landing_page` を表示する
-2. re-join code 入力欄に code を入力する
-3. `Start` を押す
-4. server が re-join code の存在、有効期限、対象 game の復帰可否を検証する
-5. 成功したら、入力中の player name を無視し、以前の display name / playerId / hand で `game_play` へ遷移する
-6. 失敗したら Landing page に留まり、re-join code エラーを表示する
+2. client が local storage の re-join session を読み、code 内の期限を検証する
+3. 期限内の場合だけ保存済み signaling server へ接続し、server が code の存在と対象 game の復帰可否を検証する
+4. 有効な場合だけ「前のゲームに再参加」を表示する
+5. ボタンを押したら、以前の display name / playerId / hand で `game_play` へ遷移する
+6. 無効または失敗時は session を削除し、再参加ボタンを表示しない
 
 ### 鍵なし room 作成
 
@@ -1258,8 +1239,9 @@ PixiJS 側は `BoardView` と `LocalHandView` の描画・ドラッグ操作に�
 - spectator は各プレイヤーの手札の色やカード内容を見られない
 - spectator 画面の右上には「退出」ボタンを表示する
 - online player name は同時重複不可
-- re-join code は player 参加時に server が自動生成し、有効期限は3時間
-- re-join code で resume する場合、入力中の player name は無視し、以前の display name を使う
+- re-join code は game 開始時に server が期限を埋め込んで自動生成し、local storage に保存する
+- re-join code は最大30分、または game 終了のどちらか早い方まで有効
+- 有効性確認後だけ再参加ボタンを表示し、resume 時は以前の display name を使う
 - `waiting_room` 中の参加・退出では player list / host / seating / start 可否を再計算する
 - game play 中の他 player 切断は通常 UI には表示しない
 - game play 中に切断 player の手番が来た場合、host は 5秒 + 0〜3秒後に通常 action として代行 commit する
