@@ -294,6 +294,107 @@ test('allows waiting and result copy to wrap instead of ellipsizing', async ({ b
   }
 });
 
+test('keeps the result scoreboard and next-round action together on mobile result screens', async ({ browser }) => {
+  const peer = await openPeer(browser, { width: 360, height: 560 });
+
+  try {
+    await peer.page.goto('/');
+    await peer.page.evaluate(() => {
+      document.body.innerHTML = `
+        <main class="app-shell">
+          <header class="topbar">
+            <div class="brand">
+              <div class="brand__copy">
+                <h1 class="brand__title">Penguin Party</h1>
+                <span class="brand__mode">P2P</span>
+              </div>
+            </div>
+            <div class="connection-indicator">Connected</div>
+          </header>
+          <section class="game-shell" data-scene="round_result" data-style-probe="result-actions">
+            <aside class="scoreboard" aria-label="Players">
+              <div class="scoreboard__header">
+                <span>Round 1 / 2</span>
+                <strong>round result</strong>
+              </div>
+            </aside>
+            <section class="play-area">
+              <div class="result-review-panel" data-result-review-panel>
+                <div class="summary-panel summary-panel--result-review" data-round-result>
+                  <h2>Round result 1 / 2</h2>
+                  <div class="summary-row">
+                    <span>#1 Player</span>
+                    <span>+0</span>
+                    <strong>0 pts</strong>
+                  </div>
+                  <div class="ready-gate ready-gate--result" data-ready-gate="round_result">
+                    <div class="action-bar__buttons result-review-actions">
+                      <button data-ready-toggle data-result-primary-action type="button">Next round</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="stage-frame"><div class="waiting-canvas">Result board</div></div>
+              <p class="game-message">Round complete.</p>
+            </section>
+            <aside class="round-panel">
+              <div class="metric-grid"><div><span>Board</span><strong>12</strong></div></div>
+              <div class="result-exit-actions" data-result-exit-actions>
+                <button class="button-secondary" data-result-secondary-action type="button">Leave</button>
+              </div>
+            </aside>
+          </section>
+        </main>
+      `;
+    });
+
+    const layout = await peer.page.evaluate(() => {
+      const resultPanel = document.querySelector('[data-result-review-panel]');
+      const summary = document.querySelector('[data-round-result]');
+      const primary = document.querySelector('[data-result-primary-action]');
+      const secondary = document.querySelector('[data-result-secondary-action]');
+      const roundPanel = document.querySelector('.round-panel');
+      const stage = document.querySelector('.stage-frame')?.getBoundingClientRect();
+      const resultPanelBox = resultPanel?.getBoundingClientRect();
+      const primaryBox = primary?.getBoundingClientRect();
+      const secondaryBox = secondary?.getBoundingClientRect();
+      const roundPanelBox = roundPanel?.getBoundingClientRect();
+
+      return resultPanel && summary && primary && secondary && roundPanel && stage && resultPanelBox && primaryBox && secondaryBox && roundPanelBox
+        ? {
+            resultPanelContainsSecondary: resultPanel.contains(secondary),
+            roundPanelContainsSecondary: roundPanel.contains(secondary),
+            roundPanelTop: roundPanelBox.top,
+            primaryBottom: primaryBox.bottom,
+            primaryInsideResultPanel: resultPanel.contains(primary),
+            primaryTop: primaryBox.top,
+            resultPanelBottom: resultPanelBox.bottom,
+            resultPanelTop: resultPanelBox.top,
+            secondaryTop: secondaryBox.top,
+            stageTop: stage.top,
+            summaryInsideResultPanel: resultPanel.contains(summary),
+            viewportHeight: window.innerHeight,
+          }
+        : null;
+    });
+
+    expect(layout).not.toBeNull();
+    expect(layout!.summaryInsideResultPanel).toBe(true);
+    expect(layout!.primaryInsideResultPanel).toBe(true);
+    expect(layout!.resultPanelTop).toBeLessThan(layout!.stageTop);
+    expect(layout!.resultPanelBottom).toBeLessThanOrEqual(layout!.stageTop);
+    expect(layout!.resultPanelContainsSecondary).toBe(false);
+    expect(layout!.roundPanelContainsSecondary).toBe(true);
+    expect(layout!.secondaryTop).toBeGreaterThanOrEqual(layout!.roundPanelTop);
+    expect(layout!.secondaryTop).toBeGreaterThan(layout!.stageTop);
+    expect(layout!.primaryBottom).toBeLessThanOrEqual(layout!.viewportHeight);
+    expect(peer.consoleErrors).toEqual([]);
+    expect(peer.failedRequests).toEqual([]);
+  } finally {
+    await peer.context.close();
+  }
+});
+
 test('rejects duplicate online player names before matchmaking', async ({ browser }, testInfo) => {
   const names = peerNames('Dup', testInfo.project.name, 1);
   const peerA = await openPeer(browser, { width: 1280, height: 720 });

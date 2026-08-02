@@ -423,6 +423,8 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
   const readyGateStatusText = currentReadyGate
     ? readyStatusText(currentReadyGate, localReady, readyGateRemainingCount, readyGatePlayerIds.length)
     : '';
+  const isResultScene = game?.status === 'round_result' || game?.status === 'game_result';
+  const isResultReadyGate = !isSpectator && (currentReadyGate === 'round_result' || currentReadyGate === 'game_result');
 
   useEffect(() => {
     if (!canMaximizeSpectatorBoard) {
@@ -1220,29 +1222,69 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
           ) : null}
 
           <section className="play-area">
-            <div className="action-bar">
-              {currentReadyGate === 'waiting_room' && !isSpectator ? (
-                <div className="ready-gate" data-ready-gate={currentReadyGate}>
+            {!isResultScene ? (
+              <div className="action-bar">
+                {currentReadyGate === 'waiting_room' && !isSpectator ? (
+                  <div className="ready-gate" data-ready-gate={currentReadyGate}>
+                    <div className="action-bar__buttons">
+                      <button data-ready-toggle data-start-game type="button" onClick={handleToggleReady}>
+                        {readyGateActionLabel}
+                      </button>
+                      <button type="button" onClick={handleLeaveClick}>
+                        {t('button.leave')}
+                      </button>
+                    </div>
+                    {localReady || readyGatePlayerIds.length < 2 ? (
+                      <p className="ready-gate__status" data-ready-status>{readyGateStatusText}</p>
+                    ) : null}
+                  </div>
+                ) : (
                   <div className="action-bar__buttons">
-                    <button data-ready-toggle data-start-game type="button" onClick={handleToggleReady}>
-                      {readyGateActionLabel}
-                    </button>
                     <button type="button" onClick={handleLeaveClick}>
                       {t('button.leave')}
                     </button>
                   </div>
-                  {localReady || readyGatePlayerIds.length < 2 ? (
-                    <p className="ready-gate__status" data-ready-status>{readyGateStatusText}</p>
-                  ) : null}
+                )}
+              </div>
+            ) : null}
+
+            {isResultScene ? (
+              <div className="result-review-panel" data-result-review-panel>
+                <div className="summary-panel summary-panel--result-review" data-game-result={game.status === 'game_result' ? 'true' : undefined} data-round-result>
+                  <h2>
+                    {game.status === 'game_result' ? t('summary.finalResult') : t('summary.roundResult')}{' '}
+                    {latestSummary
+                      ? t('common.fraction', { current: latestSummary.roundIndex + 1, total: game.totalRounds })
+                      : ''}
+                  </h2>
+                  {standings.map((standing) => {
+                    const roundResult = latestSummary?.playerResults.find(
+                      (result) => result.playerId === standing.playerId,
+                    );
+
+                    return (
+                      <div className="summary-row" key={standing.playerId}>
+                        <span>{t('common.rankedName', { displayName: standing.displayName, rank: standing.rank })}</span>
+                        <span>{formatPenaltyDelta(roundResult?.netPenaltyDelta ?? 0)}</span>
+                        <strong>{t('common.points', { count: standing.totalPenalty })}</strong>
+                      </div>
+                    );
+                  })}
+                  <div className="ready-gate ready-gate--result" data-ready-gate={currentReadyGate ?? undefined}>
+                    <div className="action-bar__buttons result-review-actions">
+                      {isResultReadyGate ? (
+                        <button data-ready-toggle data-result-primary-action type="button" onClick={handleToggleReady}>
+                          {readyGateActionLabel}
+                        </button>
+                      ) : null}
+                    </div>
+                    {isResultReadyGate && localReady ? (
+                      <p className="ready-gate__status" data-ready-status>{readyGateStatusText}</p>
+                    ) : null}
+                  </div>
                 </div>
-              ) : (
-                <div className="action-bar__buttons">
-                  <button type="button" onClick={handleLeaveClick}>
-                    {t('button.leave')}
-                  </button>
-                </div>
-              )}
-            </div>
+              </div>
+            ) : null}
 
             <div className="stage-frame">
               {game ? (
@@ -1348,37 +1390,11 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
               </div>
             </div>
 
-            {game?.status === 'round_result' || game?.status === 'game_result' ? (
-              <div className="summary-panel" data-game-result={game.status === 'game_result' ? 'true' : undefined} data-round-result>
-                <h2>
-                  {game.status === 'game_result' ? t('summary.finalResult') : t('summary.roundResult')}{' '}
-                  {latestSummary
-                    ? t('common.fraction', { current: latestSummary.roundIndex + 1, total: game.totalRounds })
-                    : ''}
-                </h2>
-                {standings.map((standing) => {
-                  const roundResult = latestSummary?.playerResults.find(
-                    (result) => result.playerId === standing.playerId,
-                  );
-
-                  return (
-                    <div className="summary-row" key={standing.playerId}>
-                      <span>{t('common.rankedName', { displayName: standing.displayName, rank: standing.rank })}</span>
-                      <span>{formatPenaltyDelta(roundResult?.netPenaltyDelta ?? 0)}</span>
-                      <strong>{t('common.points', { count: standing.totalPenalty })}</strong>
-                    </div>
-                  );
-                })}
-                {currentReadyGate && !isSpectator ? (
-                  <div className="ready-gate ready-gate--result" data-ready-gate={currentReadyGate}>
-                    <button data-ready-toggle type="button" onClick={handleToggleReady}>
-                      {readyGateActionLabel}
-                    </button>
-                    {localReady ? (
-                      <p className="ready-gate__status" data-ready-status>{readyGateStatusText}</p>
-                    ) : null}
-                  </div>
-                ) : null}
+            {isResultScene ? (
+              <div className="result-exit-actions" data-result-exit-actions>
+                <button className="button-secondary" data-result-secondary-action type="button" onClick={handleLeaveClick}>
+                  {t('button.leave')}
+                </button>
               </div>
             ) : null}
           </aside>

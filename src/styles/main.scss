@@ -595,6 +595,31 @@ button {
   text-align: left;
 }
 
+.result-review-panel {
+  min-width: 0;
+}
+
+.summary-panel--result-review {
+  gap: 10px;
+}
+
+.result-review-actions {
+  justify-content: flex-end;
+
+  button {
+    min-width: 140px;
+  }
+}
+
+.result-exit-actions {
+  display: flex;
+  justify-content: flex-end;
+
+  button {
+    min-width: 140px;
+  }
+}
+
 .game-message {
   min-width: 0;
   margin: 0;
@@ -1171,6 +1196,19 @@ button {
 
     button {
       flex: 1 1 150px;
+    }
+  }
+
+  .result-review-actions button {
+    min-width: 0;
+  }
+
+  .result-exit-actions {
+    justify-content: stretch;
+
+    button {
+      width: 100%;
+      min-width: 0;
     }
   }
 }
