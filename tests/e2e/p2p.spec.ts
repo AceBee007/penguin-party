@@ -170,6 +170,44 @@ test('uses compact mobile scoreboard and confirms leaving during game play', asy
     expect(playAreaLayout!.messageBottomGap).toBeLessThanOrEqual(40);
     expect(playAreaLayout!.stageHeight).toBeGreaterThan(430);
 
+    await peerA.page.setViewportSize({ width: 390, height: 560 });
+    await expect.poll(async () => peerA.page.evaluate(() => {
+      const app = document.querySelector('main[data-scene="game_play"]')?.getBoundingClientRect();
+      const topbar = document.querySelector('.topbar')?.getBoundingClientRect();
+      const scoreboard = document.querySelector('.scoreboard')?.getBoundingClientRect();
+      const playArea = document.querySelector('.play-area')?.getBoundingClientRect();
+      const stage = document.querySelector('.stage-frame')?.getBoundingClientRect();
+      const pixiRoot = document.querySelector<HTMLElement>('[data-pixi-root]');
+      const canvasElement = document.querySelector<HTMLCanvasElement>('canvas');
+      const canvas = canvasElement?.getBoundingClientRect();
+      const visibleHeight = window.visualViewport?.height ?? window.innerHeight;
+      const rendererResolution = Math.min(window.devicePixelRatio || 1, 2);
+
+      return app && topbar && scoreboard && playArea && stage && pixiRoot && canvasElement && canvas
+        ? {
+            allInsideVisibleViewport:
+              app.top >= 0
+              && topbar.top >= app.top
+              && scoreboard.top >= topbar.bottom
+              && playArea.top >= scoreboard.bottom
+              && playArea.bottom <= visibleHeight + 1
+              && app.bottom <= visibleHeight + 1,
+            canvasInsidePlayArea: canvas.top >= stage.top && canvas.bottom <= stage.bottom + 1,
+            canvasVisible: canvas.height > 0 && canvas.width > 0,
+            rendererMatchesContainer:
+              Math.abs(canvasElement.height / rendererResolution - pixiRoot.clientHeight) <= 1
+              && Math.abs(canvasElement.width / rendererResolution - pixiRoot.clientWidth) <= 1,
+            viewportHeight: Math.round(visibleHeight),
+          }
+        : null;
+    })).toEqual({
+      allInsideVisibleViewport: true,
+      canvasInsidePlayArea: true,
+      canvasVisible: true,
+      rendererMatchesContainer: true,
+      viewportHeight: 560,
+    });
+
     await expect(peerA.page.locator('[data-compact-scoreboard]')).toBeVisible();
     await expect(peerA.page.locator('[data-compact-player]')).toHaveCount(2);
     await expect(peerA.page.locator('[data-compact-player][data-local="true"]')).toContainText(names[0]);

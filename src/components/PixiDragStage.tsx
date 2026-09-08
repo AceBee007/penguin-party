@@ -120,6 +120,9 @@ export function PixiDragStage({
 
     let destroyed = false;
     let app: Application | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    let visualViewport: VisualViewport | null = null;
+    const queueResize = () => app?.queueResize();
 
     void startPixiGameStage(
       mount,
@@ -133,15 +136,25 @@ export function PixiDragStage({
       onPlayCard,
       () => destroyed,
     ).then((createdApp) => {
-      app = createdApp;
-
       if (destroyed) {
-        app.destroy({ removeView: true }, DESTROY_OPTIONS);
+        createdApp.destroy({ removeView: true }, DESTROY_OPTIONS);
+        return;
       }
+
+      app = createdApp;
+      resizeObserver = new ResizeObserver(queueResize);
+      resizeObserver.observe(mount);
+      visualViewport = window.visualViewport;
+      visualViewport?.addEventListener('resize', queueResize);
+      createdApp.queueResize();
     });
 
     return () => {
       destroyed = true;
+      resizeObserver?.disconnect();
+      resizeObserver = null;
+      visualViewport?.removeEventListener('resize', queueResize);
+      visualViewport = null;
 
       if (app) {
         app.destroy({ removeView: true }, DESTROY_OPTIONS);
