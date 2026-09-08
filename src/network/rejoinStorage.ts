@@ -1,9 +1,12 @@
+import { isRecoveryKey } from './recoveryCrypto';
+
 export const REJOIN_SESSION_STORAGE_KEY = 'penguin-party.rejoinSession';
 export const REJOIN_SESSION_STORAGE_KEY_PREFIX = `${REJOIN_SESSION_STORAGE_KEY}.`;
 
 export interface StoredRejoinSession {
   rejoinCode: string;
   signalingServerUrl: string;
+  recoveryKey?: string;
 }
 
 export function getRejoinCodeExpiresAt(rejoinCode: string): number | null {
@@ -154,5 +157,15 @@ function normalizeStoredSession(session: Partial<StoredRejoinSession>): StoredRe
     ? session.signalingServerUrl.trim()
     : '';
 
-  return rejoinCode && signalingServerUrl ? { rejoinCode, signalingServerUrl } : null;
+  if (!rejoinCode || !signalingServerUrl) {
+    return null;
+  }
+
+  const recoveryKey = isRecoveryKey(session.recoveryKey) ? session.recoveryKey : undefined;
+
+  return {
+    rejoinCode,
+    signalingServerUrl,
+    ...(recoveryKey ? { recoveryKey } : {}),
+  };
 }

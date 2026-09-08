@@ -10,7 +10,7 @@ export interface RoomMetadata {
   roomName: string;
   createdAt: number;
   updatedAt: number;
-  hostPeerId: string;
+  hostPeerId: string | null;
   currentPlayerCount: number;
   currentSpectatorCount: number;
   maxPlayers: 6;
@@ -91,8 +91,8 @@ export type SignalingClientMessage =
 
 export type SignalingServerMessage =
   | { type: 'hello_ok'; room: RoomMetadata; peers: PeerSummary[] }
-  | { type: 'peer_joined'; peer: PeerSummary }
-  | { type: 'peer_disconnected'; peerId: string }
+  | { type: 'peer_joined'; peer: PeerSummary; hostPeerId: string | null }
+  | { type: 'peer_disconnected'; peerId: string; hostPeerId: string | null }
   | { type: 'peer_left'; peerId: string }
   | { type: 'offer'; fromPeerId: string; description: RTCSessionDescriptionInit }
   | { type: 'answer'; fromPeerId: string; description: RTCSessionDescriptionInit }
@@ -105,7 +105,7 @@ export interface P2PEnvelope<TPayload extends P2PGamePayload = P2PGamePayload> {
   roomId: string;
   fromPeerId: string;
   toPeerId?: string;
-  hostPeerId: string;
+  hostPeerId: string | null;
   hostEpoch: number;
   messageId: string;
   sentAt: number;
@@ -120,16 +120,60 @@ export type P2PGamePayload =
   | CommandRejected
   | EventCommitted
   | RoomPhaseChanged
-  | Heartbeat;
+  | Heartbeat
+  | SpectatorRecoverySnapshot
+  | RecoverySnapshotRequest
+  | RecoverySnapshotResponse;
 
 export interface HostHello {
   type: 'host_hello';
   currentHostPeerId: string;
   hostEpoch: number;
+  eventSeq: number;
   playerIdByPeerId: Record<string, PlayerId | null>;
   roleByPeerId: Record<string, PeerRole>;
   snapshot: GameSessionState;
+  recoveryKey?: string;
 }
+
+export interface EncryptedRecoverySnapshot {
+  version: 1;
+  algorithm: 'AES-GCM';
+  gameId: string;
+  revision: number;
+  eventSeq: number;
+  stateHash: string;
+  iv: string;
+  ciphertext: string;
+}
+
+export interface SpectatorRecoverySnapshot {
+  type: 'spectator_recovery_snapshot';
+  snapshot: EncryptedRecoverySnapshot;
+}
+
+export interface RecoverySnapshotRequest {
+  type: 'recovery_snapshot_request';
+  requestId: string;
+  requesterPlayerId: PlayerId;
+  acceptedSource: 'player' | 'spectator';
+}
+
+export type RecoverySnapshotResponse =
+  | {
+      type: 'recovery_snapshot_response';
+      requestId: string;
+      sourceRole: 'player';
+      eventSeq: number;
+      snapshot: GameSessionState;
+      recoveryKey: string;
+    }
+  | {
+      type: 'recovery_snapshot_response';
+      requestId: string;
+      sourceRole: 'spectator';
+      snapshot: EncryptedRecoverySnapshot;
+    };
 
 export interface PeerReady {
   type: 'peer_ready';

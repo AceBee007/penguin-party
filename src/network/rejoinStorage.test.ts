@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { generateRecoveryKey } from './recoveryCrypto';
 import {
   clearAllStoredRejoinSessions,
   clearStoredRejoinSession,
@@ -35,6 +36,31 @@ describe('rejoinStorage', () => {
     clearStoredRejoinSession(first.rejoinCode);
 
     expect(readStoredRejoinSessions()).toEqual([second]);
+  });
+
+  it('keeps each player recovery key scoped to its re-join code', () => {
+    const first = { ...session('tab-one', 'http://127.0.0.1:15201'), recoveryKey: generateRecoveryKey() };
+    const second = { ...session('tab-two', 'http://127.0.0.1:15201'), recoveryKey: generateRecoveryKey() };
+
+    storeRejoinSession(first);
+    storeRejoinSession(second);
+
+    expect(readStoredRejoinSessions()).toEqual([first, second]);
+
+    clearStoredRejoinSession(first.rejoinCode);
+
+    expect(readStoredRejoinSessions()).toEqual([second]);
+    expect(window.localStorage.getItem(getRejoinSessionStorageKey(first.rejoinCode))).toBeNull();
+  });
+
+  it('drops a malformed recovery key without discarding a valid re-join session', () => {
+    const stored = { ...session('tab-one', 'http://127.0.0.1:15201'), recoveryKey: 'not-a-256-bit-key' };
+    window.localStorage.setItem(getRejoinSessionStorageKey(stored.rejoinCode), JSON.stringify(stored));
+
+    expect(readStoredRejoinSessions()).toEqual([{
+      rejoinCode: stored.rejoinCode,
+      signalingServerUrl: stored.signalingServerUrl,
+    }]);
   });
 
   it('removes expired and malformed per-code entries', () => {

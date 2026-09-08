@@ -88,7 +88,9 @@
 - 待機後、切断 player の手札に合法手がある場合、host はその中からランダムに1枚と合法ターゲットを選び、切断 player 本人の action と同じ形で `event_committed` する。
 - 合法手がない場合、host は通常の「出せない」処理と同じ結果を commit する。
 - 他の online player には結果だけを通知し、host が代行した事実は UI に出さない。
-- host 自身が切断した場合は、先に host election / host migration を完了し、新 host が同じ代行処理を引き継ぐ。
+- host 自身が切断した場合は、signaling server が online player から canonical な新 host を選び、全 peer がその選出結果を採用する。
+- 旧 host の player seat、hand、active turn は維持し、新 host 自身へ手番を付け替えず、新 host が同じ待機・代行処理を引き継ぐ。
+- signaling の `peer_unavailable` は peer 単位の一時エラーとして扱い、global connection indicator には表示しない。既知の切断 peer への再接続は `peer_joined` を受け取ってから再開する。
 
 ## 名前重複制限
 
@@ -110,11 +112,18 @@
 - 有効なcodeごとにLanding pageへroom名、参加枠数 / 上限、再参加ボタンを表示し、現在Tabのcodeは先頭かつ薄い水色で強調する。押下時に以前の display name と playerId で game に resume する。
 - 手入力欄は表示せず、期限切れ、存在しない、または終了済み game の code では再参加ボタンを表示しない。
 - game 終了または明示Leave時に現在Tabのlocal storage entryとquery codeを同時に削除し、reload、Tab close、通信断では保持する。次の game 開始時に新しい code を両方へ保存する。
+- 各game開始時に256-bitの共通復旧鍵を生成し、playerだけへ配布する。local storageでは対応するre-join codeのentryに鍵を保存し、codeと同時に期限切れ・削除する。
+- spectatorは表示用redacted snapshotに加え、AES-GCM暗号化済み完全snapshotをメモリ保持するが、復旧鍵や平文のhidden informationは保持しない。
+- 全player切断時は`hostPeerId: null`として盤面をfreezeし、spectatorをhostや代行者にしない。最初にre-joinしたplayerをhostにし、online player、次にspectatorの順でsnapshotを復旧する。
 
 ## 検証
 
 - 3人 waiting room で host が離脱した後、新 host が残り2人だけでゲーム開始できることを確認する。
 - host 離脱後に開始した game で、残存全 player が手札を持ち、自分の手番で合法手をプレイできることを確認する。
 - `game_play` 中に active player が切断した場合、host が 5〜8 秒後に代行 play / no-move resolve を commit し、他 player の画面では通常 action と区別できないことを確認する。
+- active host の切断後も旧 host の手番が維持され、server が選んだ新 host が5〜8秒後に1手だけ代行し、その後に自分の手番を進められることを3 peer で確認する。
+- 切断 peer の復帰後を含め、connection indicator に `Target peer is not connected.` が残留または一時表示されないことを確認する。
 - 同じ display name では `matchmaking_lobby` へ入れないこと、race condition でも room 内に同名 player が2人作られないことを確認する。
 - re-join code で復帰した player が、以前の display name、playerId、手札、手番状態を引き継げることを確認する。
+- 2 player / 6 playerそれぞれで、全player同時切断後もspectator上の盤面が停止したまま保持され、最初の復帰playerがhostとして暗号snapshotから完全状態を復元できることを確認する。
+- spectatorの表示・debug stateには手札、山札、seed、復旧鍵が平文で存在せず、誤った鍵では暗号snapshotを復号できないことを確認する。

@@ -495,6 +495,7 @@ test('resumes a disconnected player with a re-join code', async ({ browser }, te
     expect(expiresAt).toBeGreaterThan(Date.now());
     expect(expiresAt).toBeLessThanOrEqual(Date.now() + 30 * 60 * 1000);
     expect(new URL(peerB.page.url()).searchParams.get('rejoin-code')).toBe(storedSession?.rejoinCode);
+    await startConnectionIndicatorAudit(peerA.page);
 
     await peerB.page.evaluate((rejoinCode) => {
       window.localStorage.removeItem(`penguin-party.rejoinSession.${encodeURIComponent(rejoinCode)}`);
@@ -511,6 +512,12 @@ test('resumes a disconnected player with a re-join code', async ({ browser }, te
     await expect.poll(() => getLocalPlayerName(peerB.page), { timeout: 15000 }).toBe(names[1]);
     await expect.poll(() => getStateHash(peerB.page), { timeout: 30000 }).not.toBe('none');
     await expectLocalPlayerHasMatchingGameState(peerB.page, names[1]);
+    await expect.poll(async () => (await getStoredRejoinSessions(peerB.page))[0]?.recoveryKey ?? null, {
+      timeout: 15000,
+    }).not.toBeNull();
+    await expect(peerA.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
+    await expect(peerA.page.locator('.connection-indicator')).not.toContainText('Target peer is not connected.');
+    expect(await getConnectionIndicatorHistory(peerA.page)).not.toContain('Target peer is not connected.');
 
     expect(peerA.consoleErrors).toEqual([]);
     expect(peerB.consoleErrors).toEqual([]);
@@ -518,6 +525,94 @@ test('resumes a disconnected player with a re-join code', async ({ browser }, te
     expect(peerB.failedRequests).toEqual([]);
   } finally {
     await Promise.allSettled([peerA.context.close(), peerB.context.close()]);
+  }
+});
+
+test('recovers a frozen two-player game from an encrypted spectator snapshot', async ({ browser }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-chromium', 'multi-peer recovery is covered once on desktop');
+  test.setTimeout(120_000);
+
+  const names = peerNames('Recover', testInfo.project.name, 3);
+  const peerA = await openPeer(browser, { width: 1280, height: 720 });
+  const peerB = await openPeer(browser, { width: 1280, height: 720 });
+  const spectator = await openPeer(browser, { width: 1280, height: 720 });
+
+  try {
+    await Promise.all([peerA.page.goto('/'), peerB.page.goto('/'), spectator.page.goto('/')]);
+    await enterMatchmaking(peerA.page, names[0]);
+    await enterMatchmaking(peerB.page, names[1]);
+    await createRoom(peerA.page);
+    const roomId = (await peerA.page.locator('[data-room-id]').textContent())?.trim();
+
+    if (!roomId) {
+      throw new Error('Peer A did not create a room code.');
+    }
+
+    await joinRoomFromList(peerB.page, roomId);
+    await expect(peerA.page.locator('[data-connected-count]')).toHaveText('2', { timeout: 15000 });
+    await expect(peerB.page.locator('[data-connected-count]')).toHaveText('2', { timeout: 15000 });
+    await readyPlayers(peerA.page, peerB.page);
+    await expectActivePlayer(peerA.page, names[0]);
+    await dragCard(peerA.page, 0);
+    await expectActivePlayer(peerB.page, names[1]);
+    await dragCard(peerB.page, -0.13);
+    await expect(peerA.page.locator('[data-board-count]')).toHaveText('2');
+
+    await enterMatchmaking(spectator.page, names[2]);
+    await joinRoomFromList(spectator.page, roomId);
+    await expect.poll(() => getLocalRole(spectator.page), { timeout: 15000 }).toBe('spectator');
+    await expect(spectator.page.locator('[data-board-count]')).toHaveText('2', { timeout: 30000 });
+    await expect.poll(() => getStateHash(spectator.page)).toBe(await getStateHash(peerA.page));
+    await spectator.page.waitForTimeout(1500);
+
+    const [sessionA] = await getStoredRejoinSessions(peerA.page);
+    const [sessionB] = await getStoredRejoinSessions(peerB.page);
+
+    expect(sessionA?.recoveryKey).toBeTruthy();
+    expect(sessionB?.recoveryKey).toBe(sessionA?.recoveryKey);
+    expect(await getStoredRejoinSessions(spectator.page)).toHaveLength(0);
+    await expectSpectatorStateIsRedacted(spectator.page, 2);
+
+    await Promise.all([peerA.page.reload(), peerB.page.reload()]);
+    await expect.poll(() => getHostPeerId(spectator.page), { timeout: 15000 }).toBeNull();
+    const frozenState = await getGameMarker(spectator.page);
+
+    await spectator.page.waitForTimeout(8500);
+    expect(await getGameMarker(spectator.page)).toEqual(frozenState);
+
+    await expect(peerA.page.locator('[data-rejoin-current-tab="true"]')).toBeVisible({ timeout: 15000 });
+    await peerA.page.locator('[data-rejoin-current-tab="true"]').click();
+    await expect.poll(() => getLocalRole(peerA.page), { timeout: 20000 }).toBe('host');
+    await expect.poll(() => getStateHash(peerA.page), { timeout: 20000 }).toBe(frozenState.stateHash);
+    await expect(peerA.page.locator('[data-board-count]')).toHaveText('2');
+    await expectLocalPlayerHasMatchingGameState(peerA.page, names[0]);
+    await expect.poll(() => getHostPeerId(spectator.page), { timeout: 15000 }).toBe(await getLocalPeerId(peerA.page));
+
+    await dragCard(peerA.page, 0.13);
+    await expect(peerA.page.locator('[data-board-count]')).toHaveText('3');
+    await expect(spectator.page.locator('[data-board-count]')).toHaveText('3');
+
+    await expect(peerB.page.locator('[data-rejoin-current-tab="true"]')).toBeVisible({ timeout: 15000 });
+    await peerB.page.locator('[data-rejoin-current-tab="true"]').click();
+    await expect.poll(() => getLocalRole(peerB.page), { timeout: 20000 }).toBe('player');
+    await expect.poll(async () => {
+      const [hostHash, playerHash] = await Promise.all([getStateHash(peerA.page), getStateHash(peerB.page)]);
+      return playerHash === hostHash;
+    }, { timeout: 20000 }).toBe(true);
+    await expectLocalPlayerHasMatchingGameState(peerB.page, names[1]);
+
+    const [restoredSessionA] = await getStoredRejoinSessions(peerA.page);
+    const [restoredSessionB] = await getStoredRejoinSessions(peerB.page);
+    expect(restoredSessionA?.recoveryKey).toBe(sessionA?.recoveryKey);
+    expect(restoredSessionB?.recoveryKey).toBe(sessionA?.recoveryKey);
+    await expectSpectatorStateIsRedacted(spectator.page, 2);
+
+    for (const peer of [peerA, peerB, spectator]) {
+      expect(peer.consoleErrors).toEqual([]);
+      expect(peer.failedRequests).toEqual([]);
+    }
+  } finally {
+    await Promise.allSettled([peerA.context.close(), peerB.context.close(), spectator.context.close()]);
   }
 });
 
@@ -631,11 +726,87 @@ test('host silently auto-plays for a disconnected active player', async ({ brows
     await expectActivePlayer(peerA.page, names[0]);
     const disconnectedPlayerRow = peerA.page.locator('.player-row').filter({ hasText: names[1] });
     await expect(disconnectedPlayerRow).not.toContainText(/closed|disconnected|reconnecting/i);
+    await expect(peerA.page.locator('.connection-indicator')).not.toContainText('Target peer is not connected.');
 
     expect(peerA.consoleErrors).toEqual([]);
     expect(peerA.failedRequests).toEqual([]);
   } finally {
     await Promise.allSettled([peerA.context.close(), peerB.context.close()]);
+  }
+});
+
+test('promotes a new host and auto-plays for the disconnected host without changing the active seat', async ({ browser }, testInfo) => {
+  const names = peerNames('HostAuto', testInfo.project.name, 3);
+  const peerA = await openPeer(browser, { width: 1280, height: 720 });
+  const peerB = await openPeer(browser, { width: 1280, height: 720 });
+  const peerC = await openPeer(browser, { width: 1280, height: 720 });
+
+  try {
+    await peerA.page.goto('/');
+    await peerB.page.goto('/');
+    await peerC.page.goto('/');
+
+    await enterMatchmaking(peerA.page, names[0]);
+    await enterMatchmaking(peerB.page, names[1]);
+    await enterMatchmaking(peerC.page, names[2]);
+    await createRoom(peerA.page);
+    const roomId = (await peerA.page.locator('[data-room-id]').textContent())?.trim();
+
+    if (!roomId) {
+      throw new Error('Peer A did not create a room code.');
+    }
+
+    await joinRoomFromList(peerB.page, roomId);
+    await joinRoomFromList(peerC.page, roomId);
+    await expect(peerA.page.locator('[data-connected-count]')).toHaveText('3', { timeout: 15000 });
+    await readyPlayers(peerA.page, peerB.page, peerC.page);
+    await expectActivePlayer(peerB.page, names[0]);
+    await expectActivePlayer(peerC.page, names[0]);
+    await expect(peerB.page.locator('[data-board-count]')).toHaveText('0');
+    const originalHostPeerId = await getLocalPeerId(peerA.page);
+    await startConnectionIndicatorAudit(peerB.page);
+    await startConnectionIndicatorAudit(peerC.page);
+
+    await peerA.context.close();
+
+    await expect.poll(() => getLocalRole(peerB.page), { timeout: 15000 }).toBe('host');
+    await expect.poll(() => getLocalRole(peerC.page), { timeout: 15000 }).toBe('player');
+    const promotedHostPeerId = await getLocalPeerId(peerB.page);
+
+    expect(promotedHostPeerId).not.toBe(originalHostPeerId);
+    await expect(peerB.page.locator('[data-host-peer]')).toHaveText(promotedHostPeerId);
+    await expect(peerC.page.locator('[data-host-peer]')).toHaveText(promotedHostPeerId);
+    await expectActivePlayer(peerB.page, names[0]);
+    await expectActivePlayer(peerC.page, names[0]);
+    await expect(peerB.page.locator('[data-player-count]')).toHaveText('3');
+    await expect(peerC.page.locator('[data-player-count]')).toHaveText('3');
+
+    await peerB.page.waitForTimeout(3000);
+    await expect(peerB.page.locator('[data-board-count]')).toHaveText('0');
+    await expect(peerC.page.locator('[data-board-count]')).toHaveText('0');
+
+    await expect(peerB.page.locator('[data-board-count]')).toHaveText('1', { timeout: 8000 });
+    await expect(peerC.page.locator('[data-board-count]')).toHaveText('1', { timeout: 8000 });
+    await expectActivePlayer(peerB.page, names[1]);
+    await expectActivePlayer(peerC.page, names[1]);
+    await expect.poll(() => getStateHash(peerC.page)).toBe(await getStateHash(peerB.page));
+
+    await dragCard(peerB.page, -0.13);
+    await expect(peerB.page.locator('[data-board-count]')).toHaveText('2');
+    await expect(peerC.page.locator('[data-board-count]')).toHaveText('2');
+    await expect.poll(() => getStateHash(peerC.page)).toBe(await getStateHash(peerB.page));
+
+    for (const page of [peerB.page, peerC.page]) {
+      await expect(page.locator('.connection-indicator')).not.toContainText('Target peer is not connected.');
+      expect(await getConnectionIndicatorHistory(page)).not.toContain('Target peer is not connected.');
+    }
+
+    expect(peerB.consoleErrors).toEqual([]);
+    expect(peerC.consoleErrors).toEqual([]);
+    expect(peerB.failedRequests).toEqual([]);
+    expect(peerC.failedRequests).toEqual([]);
+  } finally {
+    await Promise.allSettled([peerA.context.close(), peerB.context.close(), peerC.context.close()]);
   }
 });
 
@@ -770,6 +941,14 @@ async function getLocalRole(page: Page) {
   });
 }
 
+async function getLocalPeerId(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as { identity?: { peerId: string } } | undefined;
+
+    return debug?.identity?.peerId ?? 'none';
+  });
+}
+
 async function getStateHash(page: Page) {
   return page.evaluate(() => {
     const debug = window.__PENGUIN_DEBUG__ as { game?: { stateHash: string } } | undefined;
@@ -778,11 +957,96 @@ async function getStateHash(page: Page) {
   });
 }
 
+async function getHostPeerId(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as { hostPeerId?: string | null } | undefined;
+
+    return debug?.hostPeerId ?? null;
+  });
+}
+
+async function getGameMarker(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as {
+      game?: {
+        currentRound?: { board: { occupiedCellKeys: string[] } };
+        revision: number;
+        stateHash: string;
+      };
+    } | undefined;
+
+    return {
+      boardCount: debug?.game?.currentRound?.board.occupiedCellKeys.length ?? -1,
+      revision: debug?.game?.revision ?? -1,
+      stateHash: debug?.game?.stateHash ?? 'none',
+    };
+  });
+}
+
+async function expectSpectatorStateIsRedacted(page: Page, playerCount: number) {
+  const state = await page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as {
+      game?: {
+        currentRound?: {
+          deck: { shuffledCardIds: string[]; dealtCardIdsByPlayer: Record<string, string[]> };
+          players: Record<string, { handCardIds: string[] }>;
+        };
+        randomSeed: string;
+      };
+    } | undefined;
+
+    return {
+      dealtPlayerCount: Object.keys(debug?.game?.currentRound?.deck.dealtCardIdsByPlayer ?? {}).length,
+      handCounts: Object.values(debug?.game?.currentRound?.players ?? {}).map((player) => player.handCardIds.length),
+      randomSeed: debug?.game?.randomSeed,
+      shuffledCardCount: debug?.game?.currentRound?.deck.shuffledCardIds.length,
+    };
+  });
+
+  expect(state).toEqual({
+    dealtPlayerCount: 0,
+    handCounts: Array.from({ length: playerCount }, () => 0),
+    randomSeed: 'redacted',
+    shuffledCardCount: 0,
+  });
+}
+
+async function startConnectionIndicatorAudit(page: Page) {
+  await page.evaluate(() => {
+    const auditWindow = window as Window & {
+      __connectionIndicatorHistory?: string[];
+      __connectionIndicatorObserver?: MutationObserver;
+    };
+    const indicator = document.querySelector('.connection-indicator');
+    const history: string[] = [];
+    const recordIndicator = () => history.push(indicator?.textContent?.trim() ?? '');
+
+    auditWindow.__connectionIndicatorObserver?.disconnect();
+    auditWindow.__connectionIndicatorHistory = history;
+    recordIndicator();
+
+    if (indicator) {
+      const observer = new MutationObserver(recordIndicator);
+      observer.observe(indicator, { characterData: true, childList: true, subtree: true });
+      auditWindow.__connectionIndicatorObserver = observer;
+    }
+  });
+}
+
+async function getConnectionIndicatorHistory(page: Page) {
+  return page.evaluate(() => {
+    const auditWindow = window as Window & { __connectionIndicatorHistory?: string[] };
+
+    return auditWindow.__connectionIndicatorHistory ?? [];
+  });
+}
+
 async function getStoredRejoinSessions(page: Page) {
   return page.evaluate(() => Object.keys(window.localStorage)
     .filter((key) => key.startsWith('penguin-party.rejoinSession.'))
     .map((key) => JSON.parse(window.localStorage.getItem(key) ?? 'null') as {
       rejoinCode: string;
+      recoveryKey?: string;
       signalingServerUrl: string;
     })
     .filter(Boolean));

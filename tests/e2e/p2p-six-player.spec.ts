@@ -181,6 +181,88 @@ test('runs six player mesh, spectator join, locked room, room full, and host ele
   }
 });
 
+test('freezes and recovers a six-player game when every player disconnects', async ({ browser }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-chromium', 'six-player recovery is covered once on desktop');
+  test.setTimeout(180_000);
+
+  const runSuffix = Math.random().toString(16).slice(2, 6);
+  const peers = await Promise.all(
+    ['CryA', 'CryB', 'CryC', 'CryD', 'CryE', 'CryF']
+      .map((prefix) => `${prefix}${runSuffix}`)
+      .map((name) => openPeer(browser, name, { width: 1280, height: 720 })),
+  );
+  const spectator = await openPeer(browser, `Vault${runSuffix}`, { width: 1280, height: 720 });
+
+  try {
+    await peers[0].page.goto('/');
+    await enterMatchmaking(peers[0].page, peers[0].name);
+    await peers[0].page.locator('[data-open-create-room]').click();
+    await peers[0].page.locator('[data-create-password]').fill('snapshot');
+    await peers[0].page.locator('[data-create-room-submit]').click();
+    const roomId = (await peers[0].page.locator('[data-room-id]').textContent())?.trim();
+
+    if (!roomId) {
+      throw new Error('Peer A did not create a room.');
+    }
+
+    for (const peer of peers.slice(1)) {
+      await joinRoom(peer.page, roomId, peer.name, 'snapshot');
+    }
+
+    await expectAll(peers, '[data-connected-count]', '6');
+    await readyPlayers(...peers.map((peer) => peer.page));
+    await expectAllActivePlayer(peers, peers[0].name);
+    await dragCard(peers[0].page, 0);
+    await expectAll(peers, '[data-board-count]', '1');
+
+    await joinRoom(spectator.page, roomId, spectator.name, 'snapshot');
+    await expect.poll(() => getLocalRole(spectator.page), { timeout: 15000 }).toBe('spectator');
+    await expect(spectator.page.locator('[data-board-count]')).toHaveText('1', { timeout: 30000 });
+    await spectator.page.waitForTimeout(1500);
+
+    const sessions = await Promise.all(peers.map((peer) => getOnlyStoredRejoinSession(peer.page)));
+    expect(sessions.every((session) => Boolean(session.recoveryKey))).toBe(true);
+    expect(new Set(sessions.map((session) => session.recoveryKey)).size).toBe(1);
+    await expectSpectatorSecretsRedacted(spectator.page, 6);
+
+    await Promise.all(peers.map((peer) => peer.page.reload()));
+    await expect.poll(() => getNullableHostPeerId(spectator.page), { timeout: 30000 }).toBeNull();
+    const frozen = await getGameMarker(spectator.page);
+
+    await spectator.page.waitForTimeout(8500);
+    expect(await getGameMarker(spectator.page)).toEqual(frozen);
+
+    const firstRejoined = peers[4];
+    await expect(firstRejoined.page.locator('[data-rejoin-current-tab="true"]')).toBeVisible({ timeout: 20000 });
+    await firstRejoined.page.locator('[data-rejoin-current-tab="true"]').click();
+    await expect.poll(() => getLocalRole(firstRejoined.page), { timeout: 30000 }).toBe('host');
+    await expect.poll(() => getStateHash(firstRejoined.page), { timeout: 30000 }).toBe(frozen.stateHash);
+    await expect(firstRejoined.page.locator('[data-board-count]')).toHaveText('1');
+    const recoveredHostPeerId = await getLocalPeerId(firstRejoined.page);
+    await expect.poll(() => getNullableHostPeerId(spectator.page), { timeout: 30000 }).toBe(recoveredHostPeerId);
+    await expectFullLocalHand(firstRejoined.page);
+
+    const activePlayer = peers[1];
+    await expect(activePlayer.page.locator('[data-rejoin-current-tab="true"]')).toBeVisible({ timeout: 20000 });
+    await activePlayer.page.locator('[data-rejoin-current-tab="true"]').click();
+    await expect.poll(() => getLocalRole(activePlayer.page), { timeout: 30000 }).toBe('player');
+    await expect.poll(() => getStateHash(activePlayer.page), { timeout: 30000 }).toBe(frozen.stateHash);
+    await expectFullLocalHand(activePlayer.page);
+    await dragCard(activePlayer.page, -0.13);
+    await expect(firstRejoined.page.locator('[data-board-count]')).toHaveText('2', { timeout: 15000 });
+    await expect(spectator.page.locator('[data-board-count]')).toHaveText('2', { timeout: 15000 });
+    await expect.poll(() => getStateHash(spectator.page), { timeout: 30000 }).toBe(await getStateHash(firstRejoined.page));
+    await expectSpectatorSecretsRedacted(spectator.page, 6);
+
+    for (const peer of [...peers, spectator]) {
+      expect(peer.consoleErrors).toEqual([]);
+      expect(peer.failedRequests).toEqual([]);
+    }
+  } finally {
+    await Promise.allSettled([...peers, spectator].map((peer) => peer.context.close()));
+  }
+});
+
 async function openPeer(browser: Browser, name: string, viewport: { width: number; height: number }) {
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
@@ -295,6 +377,95 @@ async function getStateHash(page: Page) {
     const debug = window.__PENGUIN_DEBUG__ as { game?: { stateHash: string } } | undefined;
 
     return debug?.game?.stateHash ?? 'none';
+  });
+}
+
+async function getNullableHostPeerId(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as { hostPeerId?: string | null } | undefined;
+    return debug?.hostPeerId ?? null;
+  });
+}
+
+async function getGameMarker(page: Page) {
+  return page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as {
+      game?: {
+        currentRound?: { board: { occupiedCellKeys: string[] } };
+        revision: number;
+        stateHash: string;
+      };
+    } | undefined;
+
+    return {
+      boardCount: debug?.game?.currentRound?.board.occupiedCellKeys.length ?? -1,
+      revision: debug?.game?.revision ?? -1,
+      stateHash: debug?.game?.stateHash ?? 'none',
+    };
+  });
+}
+
+async function getOnlyStoredRejoinSession(page: Page) {
+  const sessions = await page.evaluate(() => Object.keys(window.localStorage)
+    .filter((key) => key.startsWith('penguin-party.rejoinSession.'))
+    .map((key) => JSON.parse(window.localStorage.getItem(key) ?? 'null') as {
+      rejoinCode: string;
+      recoveryKey?: string;
+      signalingServerUrl: string;
+    })
+    .filter(Boolean));
+
+  if (sessions.length !== 1 || !sessions[0]) {
+    throw new Error(`Expected exactly one stored re-join session, received ${sessions.length}.`);
+  }
+
+  return sessions[0];
+}
+
+async function expectFullLocalHand(page: Page) {
+  const hand = await page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as {
+      game?: { currentRound?: { players: Record<string, { handCardIds: string[]; remainingCardCount: number }> } };
+      identity?: { playerId: string | null };
+    } | undefined;
+    const playerId = debug?.identity?.playerId ?? null;
+    const roundPlayer = playerId ? debug?.game?.currentRound?.players[playerId] : null;
+
+    return {
+      handCount: roundPlayer?.handCardIds.length ?? 0,
+      remainingCardCount: roundPlayer?.remainingCardCount ?? 0,
+    };
+  });
+
+  expect(hand.handCount).toBeGreaterThan(0);
+  expect(hand.remainingCardCount).toBe(hand.handCount);
+}
+
+async function expectSpectatorSecretsRedacted(page: Page, playerCount: number) {
+  const state = await page.evaluate(() => {
+    const debug = window.__PENGUIN_DEBUG__ as {
+      game?: {
+        currentRound?: {
+          deck: { shuffledCardIds: string[]; dealtCardIdsByPlayer: Record<string, string[]> };
+          players: Record<string, { handCardIds: string[] }>;
+        };
+        randomSeed: string;
+      };
+    } | undefined;
+
+    return {
+      dealtPlayerCount: Object.keys(debug?.game?.currentRound?.deck.dealtCardIdsByPlayer ?? {}).length,
+      handCounts: Object.values(debug?.game?.currentRound?.players ?? {}).map((player) => player.handCardIds.length),
+      randomSeed: debug?.game?.randomSeed,
+      shuffledCardCount: debug?.game?.currentRound?.deck.shuffledCardIds.length,
+    };
+  });
+
+  expect(state).toEqual({
+    dealtPlayerCount: 0,
+    handCounts: Array.from({ length: playerCount }, () => 0),
+    randomSeed: 'redacted',
+    shuffledCardCount: 0,
   });
 }
 

@@ -29,21 +29,24 @@ interface PeerConnectionRecord {
 
 interface PeerMeshOptions {
   identity: NetworkIdentity;
-  hostPeerId: string;
+  hostPeerId: string | null;
   signalingHttpUrl: string;
   onPeersChanged: (peers: PeerRuntimeView[]) => void;
   onPayload: (envelope: P2PEnvelope) => void;
   onChannelOpen: (peer: PeerSummary) => void;
+  onPeerDisconnected?: (peerId: string, hostPeerId: string | null) => void;
   onPeerLeft?: (peerId: string) => void;
+  onHostChanged?: (hostPeerId: string | null) => void;
   onStatus: (status: string) => void;
 }
 
 export class PeerMeshClient {
   private readonly peers = new Map<string, PeerSummary>();
   private readonly connections = new Map<string, PeerConnectionRecord>();
+  private readonly signalingDisconnectedPeerIds = new Set<string>();
   private readonly pendingIceCandidates = new Map<string, RTCIceCandidateInit[]>();
   private readonly signaling: SignalingClient;
-  private currentHostPeerId: string;
+  private currentHostPeerId: string | null;
   private hostEpoch = 1;
   private retryIntervalId: number | null = null;
 
@@ -76,6 +79,7 @@ export class PeerMeshClient {
       this.retryIntervalId = null;
     }
     this.connections.clear();
+    this.signalingDisconnectedPeerIds.clear();
     this.publishPeers();
   }
 
@@ -83,7 +87,11 @@ export class PeerMeshClient {
     return [...this.connections.values()].filter((record) => record.channel?.readyState === 'open').length;
   }
 
-  setHostPeerId(peerId: string): void {
+  setHostPeerId(peerId: string | null): void {
+    if (this.currentHostPeerId === peerId) {
+      return;
+    }
+
     this.currentHostPeerId = peerId;
     this.hostEpoch += 1;
   }
@@ -119,6 +127,12 @@ export class PeerMeshClient {
   private handleSignalingMessage(message: SignalingServerMessage): void {
     if (message.type === 'hello_ok') {
       const localPeer = toLocalSummary(this.options.identity);
+      const hostChanged = this.currentHostPeerId !== message.room.hostPeerId;
+      this.setHostPeerId(message.room.hostPeerId);
+
+      if (hostChanged) {
+        this.options.onHostChanged?.(message.room.hostPeerId);
+      }
 
       for (const peer of message.peers) {
         this.peers.set(peer.peerId, peer);
@@ -135,7 +149,15 @@ export class PeerMeshClient {
     if (message.type === 'peer_joined') {
       const localPeer = toLocalSummary(this.options.identity);
       const knownPeerRejoined = this.peers.has(message.peer.peerId);
+      const hostChanged = this.currentHostPeerId !== message.hostPeerId;
 
+      this.setHostPeerId(message.hostPeerId);
+
+      if (hostChanged) {
+        this.options.onHostChanged?.(message.hostPeerId);
+      }
+
+      this.signalingDisconnectedPeerIds.delete(message.peer.peerId);
       this.peers.set(message.peer.peerId, message.peer);
 
       if (knownPeerRejoined) {
@@ -151,6 +173,9 @@ export class PeerMeshClient {
     }
 
     if (message.type === 'peer_disconnected') {
+      this.signalingDisconnectedPeerIds.add(message.peerId);
+      this.setHostPeerId(message.hostPeerId);
+
       const record = this.connections.get(message.peerId);
 
       if (record) {
@@ -160,10 +185,13 @@ export class PeerMeshClient {
       }
 
       this.publishPeers();
+      void this.reconcileConnectionsForCurrentHost();
+      this.options.onPeerDisconnected?.(message.peerId, message.hostPeerId);
       return;
     }
 
     if (message.type === 'peer_left') {
+      this.signalingDisconnectedPeerIds.delete(message.peerId);
       this.resetConnection(message.peerId);
       this.peers.delete(message.peerId);
       this.options.onPeerLeft?.(message.peerId);
@@ -191,6 +219,10 @@ export class PeerMeshClient {
     }
 
     if (message.type === 'error') {
+      if (message.code === 'peer_unavailable') {
+        return;
+      }
+
       this.options.onStatus(message.message);
     }
   }
@@ -361,7 +393,7 @@ export class PeerMeshClient {
           peerId: peer.peerId,
           playerId: peer.playerId,
           displayName: peer.displayName,
-          role: peer.role,
+          role: getCurrentPeerRole(peer, this.currentHostPeerId),
           connectionStatus:
             peer.peerId === this.options.identity.peerId ? 'connected' : (record?.status ?? 'signaling'),
         };
@@ -389,6 +421,10 @@ export class PeerMeshClient {
         continue;
       }
 
+      if (this.signalingDisconnectedPeerIds.has(peer.peerId)) {
+        continue;
+      }
+
       if (record && now - record.createdAt < 5000) {
         continue;
       }
@@ -397,6 +433,20 @@ export class PeerMeshClient {
       record?.connection.close();
       this.connections.delete(peer.peerId);
       await this.ensureConnection(peer, true);
+    }
+  }
+
+  private async reconcileConnectionsForCurrentHost(): Promise<void> {
+    const localPeer = toLocalSummary(this.options.identity);
+
+    for (const peer of this.peers.values()) {
+      if (
+        peer.peerId !== localPeer.peerId &&
+        !this.signalingDisconnectedPeerIds.has(peer.peerId) &&
+        shouldConnectPeers(localPeer, peer, this.currentHostPeerId)
+      ) {
+        await this.ensureConnection(peer, shouldCreateOffer(localPeer, peer));
+      }
     }
   }
 
@@ -437,7 +487,7 @@ export function shouldCreateOffer(localPeer: PeerSummary, remotePeer: PeerSummar
   return localPeer.peerId < remotePeer.peerId;
 }
 
-function shouldConnectPeers(localPeer: PeerSummary, remotePeer: PeerSummary, hostPeerId: string): boolean {
+function shouldConnectPeers(localPeer: PeerSummary, remotePeer: PeerSummary, hostPeerId: string | null): boolean {
   if (localPeer.role === 'spectator' || remotePeer.role === 'spectator') {
     if (localPeer.peerId !== hostPeerId && remotePeer.peerId !== hostPeerId) {
       return false;
@@ -471,6 +521,18 @@ function mapConnectionStatus(state: RTCPeerConnectionState): PeerConnectionStatu
   }
 
   return 'connecting';
+}
+
+function getCurrentPeerRole(peer: PeerSummary, currentHostPeerId: string | null): PeerSummary['role'] {
+  if (!peer.playerId) {
+    return peer.role;
+  }
+
+  if (peer.peerId === currentHostPeerId) {
+    return 'host';
+  }
+
+  return peer.role === 'host' ? 'player' : peer.role;
 }
 
 function hasPendingSignalingNegotiation(connection: RTCPeerConnection): boolean {

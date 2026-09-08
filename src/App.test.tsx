@@ -81,6 +81,50 @@ describe('App', () => {
     expect(screen.getByText('3 / 6 players')).toBeInTheDocument();
   });
 
+  it('validates every stored code and shows each valid room when the URL has no re-join code', async () => {
+    const firstServerUrl = 'http://10.0.0.17:15201';
+    const secondServerUrl = 'http://10.0.0.18:15201';
+    const firstValidCode = rejoinCode(Date.now() + 30_000, 'first-valid');
+    const invalidCode = rejoinCode(Date.now() + 40_000, 'invalid');
+    const secondValidCode = rejoinCode(Date.now() + 50_000, 'second-valid');
+    storeRejoinSession({ rejoinCode: firstValidCode, signalingServerUrl: firstServerUrl });
+    storeRejoinSession({ rejoinCode: invalidCode, signalingServerUrl: firstServerUrl });
+    storeRejoinSession({ rejoinCode: secondValidCode, signalingServerUrl: secondServerUrl });
+    const fetchMock = vi.fn().mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+      const body = typeof init?.body === 'string'
+        ? JSON.parse(init.body) as { rejoinCode?: string }
+        : {};
+      const status = body.rejoinCode === firstValidCode
+        ? { valid: true, room: rejoinRoom('First stored room', 2) }
+        : body.rejoinCode === secondValidCode
+          ? { valid: true, room: rejoinRoom('Second stored room', 4) }
+          : { valid: false };
+
+      return {
+        ok: true,
+        json: async () => String(input).endsWith('/rejoin/status') ? status : { rooms: [] },
+        status: 200,
+      };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Re-join previous game' })).toHaveLength(2));
+    const statusCalls = fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/rejoin/status'));
+    const checkedCodes = statusCalls.map(([, init]) =>
+      JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')).rejoinCode as string,
+    );
+    expect(new Set(checkedCodes)).toEqual(new Set([firstValidCode, invalidCode, secondValidCode]));
+    expect(screen.getByText('First stored room')).toBeInTheDocument();
+    expect(screen.getByText('Second stored room')).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-rejoin-room-id][data-current-tab="true"]')).toHaveLength(0);
+    expect(new URL(window.location.href).searchParams.get('rejoin-code')).toBeNull();
+    expect(window.localStorage.getItem(getRejoinSessionStorageKey(firstValidCode))).not.toBeNull();
+    expect(window.localStorage.getItem(getRejoinSessionStorageKey(secondValidCode))).not.toBeNull();
+    expect(window.localStorage.getItem(getRejoinSessionStorageKey(invalidCode))).toBeNull();
+  });
+
   it('removes an invalid stored re-join session without showing a button', async () => {
     const signalingServerUrl = 'http://10.0.0.10:15201';
     const rejoinCodeValue = rejoinCode(Date.now() + 30_000, 'invalid-code');

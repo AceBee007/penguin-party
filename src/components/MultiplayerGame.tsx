@@ -17,6 +17,12 @@ import type { CardId, GameSessionState, MoveTarget, PlayerId, RoundPlayerState }
 import { electNextHostPeerId } from '../network/hostElection';
 import { PeerMeshClient } from '../network/peerMesh';
 import {
+  decryptRecoverySnapshot,
+  encryptRecoverySnapshot,
+  generateRecoveryKey,
+  isRecoveryKey,
+} from '../network/recoveryCrypto';
+import {
   checkRejoinCode,
   checkSignalingServer,
   clearRejoinCodeQuery,
@@ -56,6 +62,7 @@ import {
 } from '../i18n/uiText';
 import type {
   EventCommitted,
+  EncryptedRecoverySnapshot,
   Heartbeat,
   HostHello,
   NetworkIdentity,
@@ -64,6 +71,8 @@ import type {
   PeerRuntimeView,
   ReadyGateKind,
   ReadyGateState,
+  RecoverySnapshotRequest,
+  RecoverySnapshotResponse,
   PeerSummary,
   PlayerCommand,
   RejoinRoomSummary,
@@ -75,6 +84,8 @@ const ROOM_LIST_POLL_MS = 1600;
 const LOBBY_NAME_RESERVATION_REFRESH_MS = 15 * 1000;
 const AUTO_PLAY_DISCONNECTED_MIN_MS = 5000;
 const AUTO_PLAY_DISCONNECTED_JITTER_MS = 3000;
+const PLAYER_RECOVERY_PRIORITY_MS = 900;
+const RECOVERY_GIVE_UP_MS = 6000;
 
 let autoSignalingConnectAttemptedUrl: string | null = null;
 
@@ -105,6 +116,20 @@ interface ScoreboardPlayerView {
 interface AvailableRejoinSession extends StoredRejoinSession {
   isCurrentTab: boolean;
   room: RejoinRoomSummary;
+}
+
+interface RecoveryAttempt {
+  requestId: string;
+  requestedPlayerPeerIds: Set<string>;
+  requestedSpectatorPeerIds: Set<string>;
+  spectatorFallbackAllowed: boolean;
+  fallbackTimeoutId: number | null;
+  giveUpTimeoutId: number | null;
+}
+
+interface EncryptedRecoverySnapshotCache {
+  cacheKey: string;
+  promise: Promise<EncryptedRecoverySnapshot>;
 }
 
 interface MultiplayerGameProps {
@@ -157,12 +182,17 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
   const readyByPlayerIdRef = useRef<Record<PlayerId, boolean>>({});
   const readyGateRef = useRef<ReadyGateKind | null>(null);
   const hostPeerIdRef = useRef<string | null>(null);
+  const connectedSignalingServerUrlRef = useRef<string | null>(null);
   const signalingConnectionRequestRef = useRef(0);
   const eventSeqRef = useRef(0);
   const autoPlayTimeoutRef = useRef<number | null>(null);
   const autoPlayScheduleRef = useRef<{ playerId: PlayerId; revision: number } | null>(null);
   const invalidatedRejoinGameIdRef = useRef<string | null>(null);
   const lastRoomLeaveAtRef = useRef(0);
+  const recoveryKeyRef = useRef<string | null>(null);
+  const spectatorRecoverySnapshotRef = useRef<EncryptedRecoverySnapshot | null>(null);
+  const recoveryAttemptRef = useRef<RecoveryAttempt | null>(null);
+  const encryptedRecoverySnapshotCacheRef = useRef<EncryptedRecoverySnapshotCache | null>(null);
   const trimmedPlayerName = playerName.trim();
   const isPlayerNameValid = trimmedPlayerName.length > 0 && trimmedPlayerName.length <= 16;
   const hasLandingStartInput = isPlayerNameValid;
@@ -251,6 +281,10 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
   }, [hostPeerId]);
 
   useEffect(() => {
+    connectedSignalingServerUrlRef.current = connectedSignalingServerUrl;
+  }, [connectedSignalingServerUrl]);
+
+  useEffect(() => {
     window.__PENGUIN_DEBUG__ = {
       game,
       hostPeerId,
@@ -267,6 +301,10 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
         autoPlayTimeoutRef.current = null;
       }
       autoPlayScheduleRef.current = null;
+      clearRecoveryAttempt();
+      recoveryKeyRef.current = null;
+      spectatorRecoverySnapshotRef.current = null;
+      encryptedRecoverySnapshotCacheRef.current = null;
       releaseCurrentNameReservation();
       meshRef.current?.close();
       delete window.__PENGUIN_DEBUG__;
@@ -304,6 +342,7 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
 
   const handleSignalingServerUrlChange = useCallback((value: string) => {
     signalingConnectionRequestRef.current += 1;
+    connectedSignalingServerUrlRef.current = null;
     setSignalingServerUrl(value);
     setConnectedSignalingServerUrl(null);
     setSignalingConnectionStatus('idle');
@@ -325,6 +364,7 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       }
 
       setSignalingServerUrl(normalizedUrl);
+      connectedSignalingServerUrlRef.current = normalizedUrl;
       setConnectedSignalingServerUrl(normalizedUrl);
       setSignalingConnectionStatus('connected');
       setSignalingServerQuery(normalizedUrl);
@@ -335,6 +375,7 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       }
 
       setSignalingConnectionStatus('error');
+      connectedSignalingServerUrlRef.current = null;
       setMessage(error instanceof Error ? error.message : t('message.signalingConnectionFailed'));
     }
   }, [signalingServerUrl]);
@@ -708,6 +749,11 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       setIdentity(nextIdentity);
     }
 
+    clearRecoveryAttempt();
+    recoveryKeyRef.current = null;
+    spectatorRecoverySnapshotRef.current = null;
+    encryptedRecoverySnapshotCacheRef.current = null;
+
     if (
       currentIdentity &&
       connectedSignalingServerUrl &&
@@ -817,13 +863,17 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       hostPeerId: nextHostPeerId,
       signalingHttpUrl,
       onPeersChanged: (nextPeers) => {
+        peersRef.current = nextPeers;
         setPeers(nextPeers);
       },
       onPayload: (envelope) => handleP2PPayload(envelope),
       onChannelOpen: (peer) => {
+        setNetworkStatus(t('network.idle'));
         setMessage(t('message.dataChannelOpen', { displayName: peer.displayName }));
 
         const currentIdentity = identityRef.current ?? nextIdentity;
+        requestRecoveryFromOpenedPeer(currentIdentity, peer);
+
         if (currentIdentity.peerId === hostPeerIdRef.current && gameRef.current) {
           sendHostHello(currentIdentity, peer, gameRef.current);
           return;
@@ -837,16 +887,33 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       onPeerLeft: (peerId) => {
         handlePeerLeft(peerId);
       },
+      onPeerDisconnected: (peerId, nextHostPeerId) => {
+        handlePlayingPeerDisconnected(peerId, nextHostPeerId);
+      },
+      onHostChanged: (nextHostPeerId) => {
+        applySignalingHostChange(nextHostPeerId);
+      },
       onStatus: (status) => {
         setNetworkStatus(status);
       },
     });
 
     meshRef.current = mesh;
+    clearRecoveryAttempt();
+    spectatorRecoverySnapshotRef.current = null;
+    encryptedRecoverySnapshotCacheRef.current = null;
+    identityRef.current = nextIdentity;
+    hostPeerIdRef.current = nextHostPeerId;
+
+    if (nextIdentity.role === 'spectator' || nextIdentity.room.status !== 'playing') {
+      recoveryKeyRef.current = null;
+    } else if (!gameRef.current) {
+      beginRecoveryAttempt();
+    }
+
     setIdentity(nextIdentity);
     setScene(nextIdentity.room.status === 'playing' ? 'game_play' : 'waiting_room');
     setHostPeerId(nextHostPeerId);
-    hostPeerIdRef.current = nextHostPeerId;
     setPeers([
       toPeerRuntime(nextIdentity, 'signaling'),
       ...nextIdentity.existingPeers.map((peer) => ({
@@ -902,14 +969,17 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       const nextStoredSession = {
         rejoinCode: session.rejoinCode,
         signalingServerUrl: session.signalingServerUrl,
+        ...(session.recoveryKey ? { recoveryKey: session.recoveryKey } : {}),
       };
 
+      recoveryKeyRef.current = session.recoveryKey ?? null;
       storeRejoinSession(nextStoredSession);
       setStoredRejoinSessions((current) => upsertStoredRejoinSession(current, nextStoredSession));
       setRejoinCodeQuery(session.rejoinCode);
       setTabRejoinCode(session.rejoinCode);
       setSignalingServerQuery(session.signalingServerUrl);
       setSignalingServerUrl(session.signalingServerUrl);
+      connectedSignalingServerUrlRef.current = session.signalingServerUrl;
       setConnectedSignalingServerUrl(session.signalingServerUrl);
       setSignalingConnectionStatus('connected');
       setPlayerName(nextIdentity.displayName);
@@ -1038,9 +1108,13 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     setIsBoardMaximized(false);
     meshRef.current?.close();
     meshRef.current = null;
+    clearRecoveryAttempt();
     identityRef.current = null;
     gameRef.current = null;
     hostPeerIdRef.current = null;
+    recoveryKeyRef.current = null;
+    spectatorRecoverySnapshotRef.current = null;
+    encryptedRecoverySnapshotCacheRef.current = null;
     eventSeqRef.current = 0;
     setIdentity(null);
     setGame(null);
@@ -1698,6 +1772,11 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       const playingIdentity = currentIdentity
         ? {
             ...currentIdentity,
+            role: currentIdentity.role === 'spectator'
+              ? 'spectator' as const
+              : currentIdentity.peerId === payload.currentHostPeerId
+                ? 'host' as const
+                : 'player' as const,
             room: { ...currentIdentity.room, status: 'playing' as const, hostPeerId: payload.currentHostPeerId },
           }
         : null;
@@ -1705,16 +1784,38 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       if (playingIdentity) {
         identityRef.current = playingIdentity;
         setIdentity(playingIdentity);
+
+        if (playingIdentity.role !== 'spectator' && isRecoveryKey(payload.recoveryKey)) {
+          rememberRecoveryKey(payload.recoveryKey, playingIdentity);
+        }
+
         void activateGameRejoinCode(playingIdentity);
       }
 
+      eventSeqRef.current = Math.max(eventSeqRef.current, payload.eventSeq);
       setHostPeerId(payload.currentHostPeerId);
       hostPeerIdRef.current = payload.currentHostPeerId;
       meshRef.current?.setHostPeerId(payload.currentHostPeerId);
       gameRef.current = payload.snapshot;
       setGame(payload.snapshot);
+      clearRecoveryAttempt();
       setMessage(t('message.receivedHostSnapshot'));
       sendPeerReady(payload.snapshot);
+      return;
+    }
+
+    if (payload.type === 'spectator_recovery_snapshot') {
+      rememberSpectatorRecoverySnapshot(envelope.fromPeerId, payload.snapshot);
+      return;
+    }
+
+    if (payload.type === 'recovery_snapshot_request') {
+      answerRecoverySnapshotRequest(envelope.fromPeerId, payload);
+      return;
+    }
+
+    if (payload.type === 'recovery_snapshot_response') {
+      void acceptRecoverySnapshotResponse(envelope.fromPeerId, payload);
       return;
     }
 
@@ -1739,6 +1840,7 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     }
 
     if (payload.type === 'event_committed') {
+      eventSeqRef.current = Math.max(eventSeqRef.current, payload.eventSeq);
       gameRef.current = payload.snapshot;
       setGame(payload.snapshot);
       setMessage(t('message.committedEvent', { eventSeq: payload.eventSeq, revision: payload.revision }));
@@ -1751,6 +1853,7 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     }
 
     if (payload.type === 'heartbeat') {
+      eventSeqRef.current = Math.max(eventSeqRef.current, payload.eventSeq);
       setHostPeerId(payload.hostPeerId);
       hostPeerIdRef.current = payload.hostPeerId;
       meshRef.current?.setHostPeerId(payload.hostPeerId);
@@ -1870,6 +1973,8 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       seed: `room-${currentIdentity.room.roomId}`,
     });
 
+    recoveryKeyRef.current = generateRecoveryKey();
+    encryptedRecoverySnapshotCacheRef.current = null;
     clearReadyGateState();
     eventSeqRef.current = 0;
     gameRef.current = snapshot;
@@ -1913,14 +2018,16 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
   }
 
   async function activateGameRejoinCode(currentIdentity: NetworkIdentity): Promise<NetworkIdentity> {
-    if (!connectedSignalingServerUrl || !currentIdentity.playerId || currentIdentity.role === 'spectator') {
+    const currentSignalingServerUrl = connectedSignalingServerUrlRef.current;
+
+    if (!currentSignalingServerUrl || !currentIdentity.playerId || currentIdentity.role === 'spectator') {
       return currentIdentity;
     }
 
     try {
       const { rejoinCode: nextRejoinCode } = await requestGameRejoinCode(
         currentIdentity,
-        connectedSignalingServerUrl,
+        currentSignalingServerUrl,
       );
 
       if (identityRef.current?.peerId !== currentIdentity.peerId) {
@@ -1933,7 +2040,8 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       };
       const nextStoredRejoinSession = {
         rejoinCode: nextRejoinCode,
-        signalingServerUrl: connectedSignalingServerUrl,
+        signalingServerUrl: currentSignalingServerUrl,
+        ...(isRecoveryKey(recoveryKeyRef.current) ? { recoveryKey: recoveryKeyRef.current } : {}),
       };
       identityRef.current = nextIdentity;
       storeRejoinSession(nextStoredRejoinSession);
@@ -1986,6 +2094,10 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     identityRef.current = waitingIdentity;
     gameRef.current = null;
     hostPeerIdRef.current = nextHostPeerId;
+    clearRecoveryAttempt();
+    recoveryKeyRef.current = null;
+    spectatorRecoverySnapshotRef.current = null;
+    encryptedRecoverySnapshotCacheRef.current = null;
     meshRef.current?.setHostPeerId(nextHostPeerId);
     removeCurrentTabRejoinSession(currentIdentity.rejoinCode);
     setIdentity(waitingIdentity);
@@ -2023,8 +2135,6 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
 
     const currentIdentity = identityRef.current;
     const currentGame = gameRef.current;
-    const leftPeer = peersRef.current.find((peer) => peer.peerId === peerId);
-
     if (!currentIdentity) {
       return;
     }
@@ -2043,6 +2153,9 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       : selectWaitingRoomHost(candidates)?.peerId ?? null;
 
     if (!nextHostPeerId) {
+      hostPeerIdRef.current = null;
+      meshRef.current?.setHostPeerId(null);
+      setHostPeerId(null);
       setMessage(t('message.hostDisconnectedNoReplacement'));
       return;
     }
@@ -2050,17 +2163,6 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     setHostPeerId(nextHostPeerId);
     hostPeerIdRef.current = nextHostPeerId;
     meshRef.current?.setHostPeerId(nextHostPeerId);
-
-    const nextHostPlayerId = candidates.find((peer) => peer.peerId === nextHostPeerId)?.playerId;
-
-    let nextGame = currentGame;
-
-    if (leftPeer?.playerId && nextHostPlayerId && currentGame?.currentRound?.activePlayerId === leftPeer.playerId) {
-      const reassigned = reassignActivePlayer(currentGame, nextHostPlayerId);
-      nextGame = reassigned;
-      gameRef.current = nextGame;
-      setGame(nextGame);
-    }
 
     if (currentIdentity.peerId === nextHostPeerId) {
       const promotedIdentity: NetworkIdentity = {
@@ -2072,15 +2174,81 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       setIdentity(promotedIdentity);
       setMessage(t('message.hostDisconnectedPromoted'));
 
-      if (nextGame) {
+      if (currentGame) {
         for (const peer of candidates) {
           if (peer.peerId !== promotedIdentity.peerId) {
-            sendHostHello(promotedIdentity, peer, nextGame);
+            sendHostHello(promotedIdentity, peer, currentGame);
           }
         }
       }
     } else {
       setMessage(t('message.hostDisconnectedElected'));
+    }
+  }
+
+  function handlePlayingPeerDisconnected(peerId: string, nextHostPeerId: string | null): void {
+    const previousHostPeerId = hostPeerIdRef.current;
+
+    if (peerId !== previousHostPeerId) {
+      return;
+    }
+
+    const currentIdentity = identityRef.current;
+
+    if (!currentIdentity) {
+      return;
+    }
+
+    if (!nextHostPeerId) {
+      clearAutoPlayTimer();
+      const hostlessIdentity: NetworkIdentity = {
+        ...currentIdentity,
+        role: currentIdentity.role === 'spectator' ? 'spectator' : 'player',
+        room: { ...currentIdentity.room, hostPeerId: null },
+      };
+      hostPeerIdRef.current = null;
+      meshRef.current?.setHostPeerId(null);
+      identityRef.current = hostlessIdentity;
+      setHostPeerId(null);
+      setIdentity(hostlessIdentity);
+      setMessage(t('message.hostDisconnectedNoReplacement'));
+      return;
+    }
+
+    const isPromoted = currentIdentity.peerId === nextHostPeerId;
+    const nextIdentity: NetworkIdentity = {
+      ...currentIdentity,
+      role: isPromoted
+        ? 'host'
+        : currentIdentity.role === 'host'
+          ? 'player'
+          : currentIdentity.role,
+      room: { ...currentIdentity.room, hostPeerId: nextHostPeerId },
+    };
+
+    hostPeerIdRef.current = nextHostPeerId;
+    meshRef.current?.setHostPeerId(nextHostPeerId);
+    identityRef.current = nextIdentity;
+    setHostPeerId(nextHostPeerId);
+    setIdentity(nextIdentity);
+
+    if (!isPromoted) {
+      setMessage(t('message.hostDisconnectedElected'));
+      return;
+    }
+
+    setMessage(t('message.hostDisconnectedPromoted'));
+
+    const currentGame = gameRef.current;
+
+    if (!currentGame) {
+      return;
+    }
+
+    for (const peer of peersRef.current) {
+      if (peer.peerId !== nextIdentity.peerId && peer.connectionStatus === 'connected') {
+        sendHostHello(nextIdentity, peer, currentGame);
+      }
     }
   }
 
@@ -2100,6 +2268,10 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
         snapshot: peer.role === 'spectator' ? redactGameForSpectator(snapshot) : snapshot,
       };
       meshRef.current?.sendPayload(peer.peerId, heartbeat);
+
+      if (peer.role === 'spectator') {
+        void sendEncryptedRecoverySnapshot(peer.peerId, snapshot, eventSeqRef.current);
+      }
     }
   }
 
@@ -2111,12 +2283,20 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       type: 'host_hello',
       currentHostPeerId: currentIdentity.peerId,
       hostEpoch: 1,
+      eventSeq: eventSeqRef.current,
       playerIdByPeerId: Object.fromEntries(allPeers.map((item) => [item.peerId, item.playerId])),
       roleByPeerId: Object.fromEntries(allPeers.map((item) => [item.peerId, item.role])),
       snapshot: peer.role === 'spectator' ? redactGameForSpectator(snapshot) : snapshot,
+      ...(peer.role !== 'spectator' && isRecoveryKey(recoveryKeyRef.current)
+        ? { recoveryKey: recoveryKeyRef.current }
+        : {}),
     };
 
     meshRef.current?.sendPayload(peer.peerId, payload);
+
+    if (peer.role === 'spectator') {
+      void sendEncryptedRecoverySnapshot(peer.peerId, snapshot, eventSeqRef.current);
+    }
   }
 
   function sendReadyGateStateToPeer(
@@ -2195,6 +2375,10 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
           snapshot: peer.role === 'spectator' ? redactGameForSpectator(nextGame) : nextGame,
         };
         meshRef.current?.sendPayload(peer.peerId, payload);
+
+        if (peer.role === 'spectator') {
+          void sendEncryptedRecoverySnapshot(peer.peerId, nextGame, eventSeqRef.current);
+        }
       }
     } catch {
       if (sourcePeerId) {
@@ -2281,7 +2465,396 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
         snapshot: peer.role === 'spectator' ? redactGameForSpectator(nextGame) : nextGame,
       };
       meshRef.current?.sendPayload(peer.peerId, payload);
+
+      if (peer.role === 'spectator') {
+        void sendEncryptedRecoverySnapshot(peer.peerId, nextGame, eventSeqRef.current);
+      }
     }
+  }
+
+  function beginRecoveryAttempt(): void {
+    clearRecoveryAttempt();
+
+    const attempt: RecoveryAttempt = {
+      requestId: createCommandId(),
+      requestedPlayerPeerIds: new Set(),
+      requestedSpectatorPeerIds: new Set(),
+      spectatorFallbackAllowed: false,
+      fallbackTimeoutId: null,
+      giveUpTimeoutId: null,
+    };
+    recoveryAttemptRef.current = attempt;
+    setMessage(t('message.recoveryWaiting'));
+    attempt.fallbackTimeoutId = window.setTimeout(() => {
+      if (recoveryAttemptRef.current !== attempt || gameRef.current) {
+        return;
+      }
+
+      attempt.spectatorFallbackAllowed = true;
+      requestRecoveryFromConnectedSpectators();
+    }, PLAYER_RECOVERY_PRIORITY_MS);
+    attempt.giveUpTimeoutId = window.setTimeout(() => {
+      if (recoveryAttemptRef.current !== attempt || gameRef.current) {
+        return;
+      }
+
+      clearRecoveryAttempt();
+      setMessage(t('message.recoveryUnavailable'));
+    }, RECOVERY_GIVE_UP_MS);
+  }
+
+  function clearRecoveryAttempt(): void {
+    const attempt = recoveryAttemptRef.current;
+
+    if (!attempt) {
+      return;
+    }
+
+    if (attempt.fallbackTimeoutId !== null) {
+      window.clearTimeout(attempt.fallbackTimeoutId);
+    }
+
+    if (attempt.giveUpTimeoutId !== null) {
+      window.clearTimeout(attempt.giveUpTimeoutId);
+    }
+
+    recoveryAttemptRef.current = null;
+  }
+
+  function requestRecoveryFromOpenedPeer(
+    currentIdentity: NetworkIdentity,
+    peer: PeerSummary | PeerRuntimeView,
+  ): void {
+    const attempt = recoveryAttemptRef.current;
+
+    if (
+      !attempt ||
+      gameRef.current ||
+      currentIdentity.room.status !== 'playing' ||
+      currentIdentity.role === 'spectator' ||
+      !currentIdentity.playerId
+    ) {
+      return;
+    }
+
+    if (peer.playerId && peer.role !== 'spectator') {
+      if (attempt.requestedPlayerPeerIds.has(peer.peerId)) {
+        return;
+      }
+
+      attempt.requestedPlayerPeerIds.add(peer.peerId);
+      sendRecoverySnapshotRequest(peer.peerId, currentIdentity.playerId, 'player');
+      return;
+    }
+
+    if (peer.role === 'spectator' && attempt.spectatorFallbackAllowed) {
+      requestRecoveryFromSpectator(peer.peerId, currentIdentity.playerId, attempt);
+    }
+  }
+
+  function requestRecoveryFromConnectedSpectators(): void {
+    const attempt = recoveryAttemptRef.current;
+    const currentIdentity = identityRef.current;
+
+    if (!attempt || !currentIdentity?.playerId || currentIdentity.role === 'spectator' || gameRef.current) {
+      return;
+    }
+
+    for (const peer of peersRef.current) {
+      if (peer.role === 'spectator' && peer.connectionStatus === 'connected') {
+        requestRecoveryFromSpectator(peer.peerId, currentIdentity.playerId, attempt);
+      }
+    }
+  }
+
+  function requestRecoveryFromSpectator(
+    peerId: string,
+    requesterPlayerId: PlayerId,
+    attempt: RecoveryAttempt,
+  ): void {
+    if (attempt.requestedSpectatorPeerIds.has(peerId)) {
+      return;
+    }
+
+    attempt.requestedSpectatorPeerIds.add(peerId);
+    sendRecoverySnapshotRequest(peerId, requesterPlayerId, 'spectator');
+  }
+
+  function sendRecoverySnapshotRequest(
+    peerId: string,
+    requesterPlayerId: PlayerId,
+    acceptedSource: RecoverySnapshotRequest['acceptedSource'],
+  ): void {
+    const attempt = recoveryAttemptRef.current;
+
+    if (!attempt) {
+      return;
+    }
+
+    meshRef.current?.sendPayload(peerId, {
+      type: 'recovery_snapshot_request',
+      requestId: attempt.requestId,
+      requesterPlayerId,
+      acceptedSource,
+    });
+  }
+
+  function answerRecoverySnapshotRequest(fromPeerId: string, request: RecoverySnapshotRequest): void {
+    const currentIdentity = identityRef.current;
+    const requester = peersRef.current.find((peer) => peer.peerId === fromPeerId);
+
+    if (
+      !currentIdentity ||
+      !requester?.playerId ||
+      requester.role === 'spectator' ||
+      requester.playerId !== request.requesterPlayerId
+    ) {
+      return;
+    }
+
+    if (request.acceptedSource === 'player') {
+      const snapshot = gameRef.current;
+      const recoveryKey = recoveryKeyRef.current;
+
+      if (
+        currentIdentity.role === 'spectator' ||
+        !currentIdentity.playerId ||
+        !snapshot ||
+        !isRecoveryKey(recoveryKey)
+      ) {
+        return;
+      }
+
+      meshRef.current?.sendPayload(fromPeerId, {
+        type: 'recovery_snapshot_response',
+        requestId: request.requestId,
+        sourceRole: 'player',
+        eventSeq: eventSeqRef.current,
+        snapshot,
+        recoveryKey,
+      });
+      return;
+    }
+
+    const encryptedSnapshot = spectatorRecoverySnapshotRef.current;
+
+    if (currentIdentity.role !== 'spectator' || !encryptedSnapshot) {
+      return;
+    }
+
+    meshRef.current?.sendPayload(fromPeerId, {
+      type: 'recovery_snapshot_response',
+      requestId: request.requestId,
+      sourceRole: 'spectator',
+      snapshot: encryptedSnapshot,
+    });
+  }
+
+  async function acceptRecoverySnapshotResponse(
+    fromPeerId: string,
+    response: RecoverySnapshotResponse,
+  ): Promise<void> {
+    const attempt = recoveryAttemptRef.current;
+    const currentIdentity = identityRef.current;
+    const source = peersRef.current.find((peer) => peer.peerId === fromPeerId);
+
+    if (
+      !attempt ||
+      response.requestId !== attempt.requestId ||
+      !currentIdentity?.playerId ||
+      currentIdentity.role === 'spectator' ||
+      gameRef.current
+    ) {
+      return;
+    }
+
+    if (response.sourceRole === 'player') {
+      if (!source?.playerId || source.role === 'spectator' || !isRecoveryKey(response.recoveryKey)) {
+        return;
+      }
+
+      if (!hasValidCompleteSnapshot(response.snapshot)) {
+        return;
+      }
+
+      rememberRecoveryKey(response.recoveryKey, currentIdentity);
+      completeRecoveredSnapshot(response.snapshot, response.eventSeq);
+      return;
+    }
+
+    if (source?.role !== 'spectator' || !isRecoveryKey(recoveryKeyRef.current)) {
+      return;
+    }
+
+    try {
+      const snapshot = await decryptRecoverySnapshot(response.snapshot, recoveryKeyRef.current);
+
+      if (recoveryAttemptRef.current !== attempt || gameRef.current || !hasValidCompleteSnapshot(snapshot)) {
+        return;
+      }
+
+      completeRecoveredSnapshot(snapshot, response.snapshot.eventSeq);
+    } catch {
+      // An invalid key or tampered spectator snapshot must never become authoritative state.
+    }
+  }
+
+  function completeRecoveredSnapshot(snapshot: GameSessionState, eventSeq: number): void {
+    const currentIdentity = identityRef.current;
+
+    if (!currentIdentity?.playerId || currentIdentity.role === 'spectator') {
+      return;
+    }
+
+    eventSeqRef.current = Math.max(eventSeqRef.current, eventSeq);
+    gameRef.current = snapshot;
+    setGame(snapshot);
+    clearRecoveryAttempt();
+    setMessage(t('message.recoveryComplete'));
+
+    if (currentIdentity.peerId !== hostPeerIdRef.current) {
+      sendPeerReady(snapshot);
+      return;
+    }
+
+    const hostIdentity: NetworkIdentity = {
+      ...currentIdentity,
+      role: 'host',
+      room: { ...currentIdentity.room, hostPeerId: currentIdentity.peerId },
+    };
+    identityRef.current = hostIdentity;
+    setIdentity(hostIdentity);
+
+    for (const peer of peersRef.current) {
+      if (peer.peerId !== hostIdentity.peerId && peer.connectionStatus === 'connected') {
+        sendHostHello(hostIdentity, peer, snapshot);
+      }
+    }
+  }
+
+  function rememberRecoveryKey(recoveryKey: string, currentIdentity: NetworkIdentity): void {
+    if (currentIdentity.role === 'spectator' || !isRecoveryKey(recoveryKey)) {
+      return;
+    }
+
+    if (recoveryKeyRef.current !== recoveryKey) {
+      recoveryKeyRef.current = recoveryKey;
+      encryptedRecoverySnapshotCacheRef.current = null;
+    }
+
+    const currentSignalingServerUrl = connectedSignalingServerUrlRef.current;
+
+    if (!currentIdentity.rejoinCode || !currentSignalingServerUrl) {
+      return;
+    }
+
+    const nextStoredSession: StoredRejoinSession = {
+      rejoinCode: currentIdentity.rejoinCode,
+      signalingServerUrl: currentSignalingServerUrl,
+      recoveryKey,
+    };
+    storeRejoinSession(nextStoredSession);
+    setStoredRejoinSessions((current) => upsertStoredRejoinSession(current, nextStoredSession));
+  }
+
+  function rememberSpectatorRecoverySnapshot(
+    fromPeerId: string,
+    encryptedSnapshot: EncryptedRecoverySnapshot,
+  ): void {
+    const currentIdentity = identityRef.current;
+    const currentGame = gameRef.current;
+
+    if (
+      currentIdentity?.role !== 'spectator' ||
+      fromPeerId !== hostPeerIdRef.current ||
+      (currentGame && encryptedSnapshot.gameId !== currentGame.gameId)
+    ) {
+      return;
+    }
+
+    const stored = spectatorRecoverySnapshotRef.current;
+
+    if (
+      stored &&
+      (stored.revision > encryptedSnapshot.revision ||
+        (stored.revision === encryptedSnapshot.revision && stored.eventSeq >= encryptedSnapshot.eventSeq))
+    ) {
+      return;
+    }
+
+    spectatorRecoverySnapshotRef.current = encryptedSnapshot;
+  }
+
+  async function sendEncryptedRecoverySnapshot(
+    peerId: string,
+    snapshot: GameSessionState,
+    eventSeq: number,
+  ): Promise<void> {
+    const currentIdentity = identityRef.current;
+    const recoveryKey = recoveryKeyRef.current;
+
+    if (
+      !currentIdentity ||
+      currentIdentity.peerId !== hostPeerIdRef.current ||
+      !isRecoveryKey(recoveryKey)
+    ) {
+      return;
+    }
+
+    const cacheKey = `${snapshot.gameId}:${snapshot.revision}:${eventSeq}:${snapshot.stateHash}`;
+    let cached = encryptedRecoverySnapshotCacheRef.current;
+
+    if (!cached || cached.cacheKey !== cacheKey) {
+      cached = {
+        cacheKey,
+        promise: encryptRecoverySnapshot(snapshot, eventSeq, recoveryKey),
+      };
+      encryptedRecoverySnapshotCacheRef.current = cached;
+    }
+
+    try {
+      const encryptedSnapshot = await cached.promise;
+
+      if (
+        identityRef.current?.peerId !== currentIdentity.peerId ||
+        hostPeerIdRef.current !== currentIdentity.peerId ||
+        recoveryKeyRef.current !== recoveryKey
+      ) {
+        return;
+      }
+
+      meshRef.current?.sendPayload(peerId, {
+        type: 'spectator_recovery_snapshot',
+        snapshot: encryptedSnapshot,
+      });
+    } catch {
+      if (encryptedRecoverySnapshotCacheRef.current === cached) {
+        encryptedRecoverySnapshotCacheRef.current = null;
+      }
+    }
+  }
+
+  function applySignalingHostChange(nextHostPeerId: string | null): void {
+    const currentIdentity = identityRef.current;
+
+    hostPeerIdRef.current = nextHostPeerId;
+    setHostPeerId(nextHostPeerId);
+
+    if (!currentIdentity) {
+      return;
+    }
+
+    const nextIdentity: NetworkIdentity = {
+      ...currentIdentity,
+      role: currentIdentity.role === 'spectator'
+        ? 'spectator'
+        : currentIdentity.peerId === nextHostPeerId
+          ? 'host'
+          : 'player',
+      room: { ...currentIdentity.room, hostPeerId: nextHostPeerId },
+    };
+    identityRef.current = nextIdentity;
+    setIdentity(nextIdentity);
   }
 
   async function refreshNameReservation(displayName: string): Promise<void> {
@@ -2323,26 +2896,6 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     nameReservationTokenRef.current = null;
     void releasePlayerNameReservation(token, connectedSignalingServerUrl ?? undefined);
   }
-}
-
-function reassignActivePlayer(game: GameSessionState, activePlayerId: PlayerId): GameSessionState {
-  if (!game.currentRound) {
-    return game;
-  }
-
-  const nextGame = {
-    ...game,
-    currentRound: {
-      ...game.currentRound,
-      activePlayerId,
-    },
-    revision: game.revision + 1,
-  };
-
-  return {
-    ...nextGame,
-    stateHash: buildStateHash(nextGame),
-  };
 }
 
 function getPlayerPeers(identity: NetworkIdentity, peers: PeerRuntimeView[]): Array<PeerRuntimeView & { playerId: PlayerId }> {
@@ -2448,6 +3001,24 @@ function formatPenaltyDelta(penaltyDelta: number): string {
   }
 
   return penaltyDelta > 0 ? `+${penaltyDelta}` : String(penaltyDelta);
+}
+
+function hasValidCompleteSnapshot(snapshot: GameSessionState): boolean {
+  if (
+    !snapshot ||
+    typeof snapshot.gameId !== 'string' ||
+    typeof snapshot.stateHash !== 'string' ||
+    !Number.isSafeInteger(snapshot.revision)
+  ) {
+    return false;
+  }
+
+  try {
+    const { stateHash, ...withoutHash } = snapshot;
+    return buildStateHash(withoutHash) === stateHash;
+  } catch {
+    return false;
+  }
 }
 
 function redactGameForSpectator(game: GameSessionState): GameSessionState {

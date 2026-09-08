@@ -55,12 +55,20 @@ wss.on('connection', (socket) => {
       peer.wsConnectedAt = Date.now();
       socketsByPeerId.set(peer.peerId, socket);
 
+      if (room.hostPeerId === null && peer.playerId) {
+        promotePeerToHost(room, peer);
+      }
+
       sendSocket(socket, {
         type: 'hello_ok',
         room: buildRoomMetadata(room),
         peers: [...room.peers.values()].map(toPeerSummary).filter((candidate) => candidate.peerId !== peer.peerId),
       });
-      broadcastToRoom(room, peer.peerId, { type: 'peer_joined', peer: toPeerSummary(peer) });
+      broadcastToRoom(room, peer.peerId, {
+        type: 'peer_joined',
+        peer: toPeerSummary(peer),
+        hostPeerId: room.hostPeerId,
+      });
       return;
     }
 
@@ -289,7 +297,7 @@ async function routeHttp(request, response) {
       return;
     }
 
-    const role = room.status === 'playing' ? 'spectator' : 'player';
+    const role = room.status === 'playing' ? 'spectator' : room.hostPeerId === null ? 'host' : 'player';
     const peer = createPeer({
       displayName,
       joinedAt: Date.now(),
@@ -301,6 +309,11 @@ async function routeHttp(request, response) {
 
     room.nextPlayerNumber += role === 'spectator' ? 0 : 1;
     room.peers.set(peer.peerId, peer);
+
+    if (role === 'host') {
+      room.hostPeerId = peer.peerId;
+    }
+
     room.updatedAt = Date.now();
     consumeLobbyNameReservation(nameReservationToken);
 
@@ -384,6 +397,12 @@ async function routeHttp(request, response) {
     if (peer.connectionStatus !== 'disconnected') {
       writeJoinError(response, { code: 'invalid_rejoin_code', message: 'このrejoin codeは無効' });
       return;
+    }
+
+    if (room.hostPeerId === null) {
+      promotePeerToHost(room, peer);
+    } else if (room.hostPeerId !== peer.peerId && peer.playerId) {
+      peer.role = 'player';
     }
 
     peer.signalingToken = createId('signal');
@@ -522,15 +541,25 @@ function handlePeerDisconnected(room, peerId) {
 
     const wasHost = room.hostPeerId === peerId;
 
+    let nextHostPeerId = room.hostPeerId;
+
     if (wasHost) {
       const nextHost = [...room.peers.values()].find(
-        (candidate) => candidate.peerId !== peerId && candidate.role !== 'spectator' && candidate.connectionStatus !== 'disconnected',
+        (candidate) =>
+          candidate.peerId !== peerId &&
+          candidate.role !== 'spectator' &&
+          candidate.connectionStatus === 'connected' &&
+          socketsByPeerId.get(candidate.peerId)?.readyState === WebSocket.OPEN,
       );
 
       if (nextHost) {
         peer.role = peer.playerId ? 'player' : peer.role;
-        room.hostPeerId = nextHost.peerId;
-        nextHost.role = 'host';
+        promotePeerToHost(room, nextHost);
+        nextHostPeerId = nextHost.peerId;
+      } else {
+        peer.role = peer.playerId ? 'player' : peer.role;
+        room.hostPeerId = null;
+        nextHostPeerId = null;
       }
     }
 
@@ -539,7 +568,7 @@ function handlePeerDisconnected(room, peerId) {
       return;
     }
 
-    broadcastToRoom(room, peerId, { type: wasHost ? 'peer_left' : 'peer_disconnected', peerId });
+    broadcastToRoom(room, peerId, { type: 'peer_disconnected', peerId, hostPeerId: nextHostPeerId });
     return;
   }
 
@@ -562,11 +591,14 @@ function removePeerFromRoom(room, peerId) {
   }
 
   if (room.hostPeerId === peerId) {
-    const nextHost = [...room.peers.values()].find((candidate) => candidate.role !== 'spectator') ?? [...room.peers.values()][0];
-    room.hostPeerId = nextHost.peerId;
+    const nextHost = [...room.peers.values()].find(
+      (candidate) => candidate.role !== 'spectator' && candidate.connectionStatus === 'connected',
+    );
 
-    if (nextHost.role !== 'spectator') {
-      nextHost.role = 'host';
+    if (nextHost) {
+      promotePeerToHost(room, nextHost);
+    } else {
+      room.hostPeerId = null;
     }
   }
 
@@ -575,6 +607,22 @@ function removePeerFromRoom(room, peerId) {
 
 function hasConnectedPeer(room) {
   return [...room.peers.values()].some((peer) => socketsByPeerId.has(peer.peerId));
+}
+
+function promotePeerToHost(room, peer) {
+  if (!peer.playerId || peer.role === 'spectator') {
+    return false;
+  }
+
+  for (const candidate of room.peers.values()) {
+    if (candidate.peerId !== peer.peerId && candidate.playerId && candidate.role === 'host') {
+      candidate.role = 'player';
+    }
+  }
+
+  peer.role = 'host';
+  room.hostPeerId = peer.peerId;
+  return true;
 }
 
 function isDisplayNameOnline(displayName, allowedReservationToken = null) {
@@ -797,7 +845,7 @@ function verifyPassword(record, password) {
  * @property {string} roomName
  * @property {number} createdAt
  * @property {number} updatedAt
- * @property {string} hostPeerId
+ * @property {string | null} hostPeerId
  * @property {number} maxPlayers
  * @property {'waiting_for_start' | 'playing'} status
  * @property {{ salt: string; hash: string } | null} passwordRecord

@@ -268,6 +268,7 @@ re-join code で復帰する場合は例外です。
 player が最初のラウンドに入る時点で、client は signaling server にその game 用の re-join code を要求します。
 re-join code は機密情報ではなく、`randomString.expiryTimestampBase36` 形式で有効期限を code 自体に含めます。
 client は code と server URL を code ごとの local storage entry に保存し、同じbrowserの複数Tabが持つcodeを共存させます。
+同じ entry に、その game の全 player だけが共有する256-bit AES-GCM復旧鍵も保存します。復旧鍵の lifetime は対応する re-join code と同一です。
 各Tabは自分のcodeだけを `rejoin-code` URL query に保持し、codeの発行・game終了・明示Leave時にはlocal storageとqueryを同じ処理で更新または削除します。
 有効期限は生成から最大30分で、game がそれより早く終了した場合は game 終了時点までです。
 game 終了時に server 側で無効化し、各clientは現在Tabのlocal storage entryとqueryから削除します。
@@ -294,6 +295,16 @@ queryだけに存在したcodeが有効ならlocal storageへ補完し、local s
 server問い合わせでも有効なcodeごとに、Landing pageへroom名、参加枠数 / 上限、再参加ボタンを表示します。
 現在Tabのqueryと一致する候補は先頭へ並べ、薄い水色で強調します。
 code の手入力欄は表示しません。
+
+### 全 player 切断時の復旧
+
+- spectator は表示用の redacted snapshot と、AES-GCMで暗号化された完全 snapshot の最新1件をメモリ保持する
+- spectator へ復旧鍵を送らず、暗号文をUI stateやdebug出力へ展開しない
+- online player が1人でも残る場合、re-join player はその player peer の完全 snapshot を優先する
+- online player が全滅した場合、盤面と自動代行を停止し、spectator を host に昇格させない
+- 最初に復帰した player を signaling server が host にし、その player が local storage の鍵で spectator の暗号文を復号する
+- spectator も暗号snapshotもない場合、または復旧鍵を失っている場合は復旧不可とする
+- 復旧後の host が通常の snapshot 配信、heartbeat、切断 player の手番代行を再開する
 
 ## 6. カードデータ
 
@@ -511,6 +522,7 @@ interface PrivatePlayerView {
 
 UI 表示用の `ClientGameView` に含めるべきでないものは、他プレイヤーの `handCardIds`、他プレイヤーのカード色一覧、乱数シード全体、検証前の仮置き結果です。
 spectator の `privateState` は `null` とし、手札、山札順、配札順、非公開乱数 seed を含めません。
+復旧用の完全 snapshot は暗号文として別のメモリ領域に保持し、`ClientGameView` には含めません。
 ただし、ホスト切断後にゲームを継続するための P2P 複製状態では、`docs/network-spec.md` に従って完全なゲーム情報を player peer が保持する場合があります。
 その場合でも、UI はローカルプレイヤー以外の手札を表示してはいけません。
 
@@ -533,7 +545,10 @@ online player へは通常の `action_resolved` / `event_committed` として送
 デバッグログや host-only state にだけ、代行実行であることを記録してよいです。
 
 host 自身が切断した場合は、まず host election / host migration を完了します。
-新 host は旧 host から複製済みの完全 snapshot を使い、同じ待機・代行ルールを継続します。
+このとき旧 host の player seat、hand、`activePlayerId` は維持し、新 host 自身へ手番を付け替えてはいけません。
+新 host は旧 host から複製済みの完全 snapshot を使い、旧 host を切断 player として同じ待機・代行ルールを継続します。
+
+online player が0人になった場合は例外で、`hostPeerId` を `null` にして盤面をfreezeします。spectatorはhostにも代行者にもなりません。復帰順で最初のplayerがhostとなり、player peer、次にspectatorの順で完全状態を復旧してから進行を再開します。
 
 ## 11. ホスト権威 peer が持っておくと便利なもの
 
