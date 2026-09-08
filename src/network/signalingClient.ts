@@ -18,6 +18,7 @@ import type {
 const SIGNALING_SERVER_QUERY_PARAM = 'signaling-server';
 const LEGACY_SIGNALING_SERVER_QUERY_PARAM = 'signal';
 const LEGACY_REJOIN_QUERY_PARAM = 'rejoin';
+const REJOIN_QUERY_PARAM = 'rejoin-code';
 const FALLBACK_SIGNALING_HOST = '127.0.0.1';
 const DEFAULT_SIGNALING_PORT = 15201;
 
@@ -77,6 +78,47 @@ export function setSignalingServerQuery(httpUrl: string): void {
   const pageUrl = new URL(window.location.href);
   pageUrl.searchParams.set(SIGNALING_SERVER_QUERY_PARAM, normalizeSignalingHttpUrl(httpUrl));
   pageUrl.searchParams.delete(LEGACY_SIGNALING_SERVER_QUERY_PARAM);
+  window.history.replaceState(window.history.state, '', `${pageUrl.pathname}${pageUrl.search}${pageUrl.hash}`);
+}
+
+export function getRejoinCodeQuery(): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const searchParams = new URLSearchParams(window.location.search);
+
+  return searchParams.get(REJOIN_QUERY_PARAM)?.trim()
+    || searchParams.get(LEGACY_REJOIN_QUERY_PARAM)?.trim()
+    || null;
+}
+
+export function setRejoinCodeQuery(rejoinCode: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const pageUrl = new URL(window.location.href);
+  pageUrl.searchParams.set(REJOIN_QUERY_PARAM, rejoinCode.trim());
+  pageUrl.searchParams.delete(LEGACY_REJOIN_QUERY_PARAM);
+  window.history.replaceState(window.history.state, '', `${pageUrl.pathname}${pageUrl.search}${pageUrl.hash}`);
+}
+
+export function clearRejoinCodeQuery(expectedRejoinCode?: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const pageUrl = new URL(window.location.href);
+  const currentRejoinCode = pageUrl.searchParams.get(REJOIN_QUERY_PARAM)?.trim()
+    || pageUrl.searchParams.get(LEGACY_REJOIN_QUERY_PARAM)?.trim()
+    || null;
+
+  if (expectedRejoinCode && currentRejoinCode !== expectedRejoinCode) {
+    return;
+  }
+
+  pageUrl.searchParams.delete(REJOIN_QUERY_PARAM);
   pageUrl.searchParams.delete(LEGACY_REJOIN_QUERY_PARAM);
   window.history.replaceState(window.history.state, '', `${pageUrl.pathname}${pageUrl.search}${pageUrl.hash}`);
 }
@@ -187,7 +229,17 @@ export async function checkRejoinCode(
   });
   const payload = (await response.json()) as RejoinCodeStatusResponse;
 
-  if (!response.ok || typeof payload.valid !== 'boolean') {
+  if (
+    !response.ok ||
+    typeof payload.valid !== 'boolean' ||
+    (payload.valid && (
+      !payload.room ||
+      typeof payload.room.roomId !== 'string' ||
+      typeof payload.room.roomName !== 'string' ||
+      typeof payload.room.currentPlayerCount !== 'number' ||
+      payload.room.maxPlayers !== 6
+    ))
+  ) {
     throw new Error(`Re-join status check failed: ${response.status}`);
   }
 

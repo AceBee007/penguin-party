@@ -267,9 +267,10 @@ re-join code で復帰する場合は例外です。
 
 player が最初のラウンドに入る時点で、client は signaling server にその game 用の re-join code を要求します。
 re-join code は機密情報ではなく、`randomString.expiryTimestampBase36` 形式で有効期限を code 自体に含めます。
-client は code と server URL を local storage に保存します。
+client は code と server URL を code ごとの local storage entry に保存し、同じbrowserの複数Tabが持つcodeを共存させます。
+各Tabは自分のcodeだけを `rejoin-code` URL query に保持し、codeの発行・game終了・明示Leave時にはlocal storageとqueryを同じ処理で更新または削除します。
 有効期限は生成から最大30分で、game がそれより早く終了した場合は game 終了時点までです。
-game 終了時に server 側で無効化し、各 client の local storage からも削除します。
+game 終了時に server 側で無効化し、各clientは現在Tabのlocal storage entryとqueryから削除します。
 
 ```ts
 interface RejoinIdentity {
@@ -286,10 +287,13 @@ re-join code で復帰する場合、landing page で入力された player name
 期限切れ、存在しない、終了済み game、waiting room に戻った game、またはすでに接続中の player の re-join code は拒否します。
 同じ room で次の game を開始する場合、前 game の code は無効化し、新しい code を発行します。
 client の再訪時は code 内の期限を先に確認し、期限内の場合だけ server に問い合わせます。
-期限切れなら server へ問い合わせず local storage から削除します。
+期限切れなら server へ問い合わせず local storage と、現在Tabで一致するqueryから削除します。
 server は次の re-join code 関連操作時に、保持中の期限切れ code を全 room から掃除します。
-server 問い合わせでも有効な場合だけ Landing page に再参加ボタンを表示します。
-code の手入力欄や URL query への埋め込みは行いません。
+clientはlocal storageの全codeに加え、local storageに存在しない現在Tabのquery codeも通常どおり検証します。
+queryだけに存在したcodeが有効ならlocal storageへ補完し、local storageを全Tab query codeのsupersetに保つようbest effortで同期します。
+server問い合わせでも有効なcodeごとに、Landing pageへroom名、参加枠数 / 上限、再参加ボタンを表示します。
+現在Tabのqueryと一致する候補は先頭へ並べ、薄い水色で強調します。
+code の手入力欄は表示しません。
 
 ## 6. カードデータ
 

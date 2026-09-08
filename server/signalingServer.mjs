@@ -348,7 +348,10 @@ async function routeHttp(request, response) {
     const match = findPeerByRejoinCode(rejoinCode);
     const valid = Boolean(match && isRejoinCodeLive(match.room, match.peer));
 
-    writeJson(response, 200, { valid });
+    writeJson(response, 200, valid ? {
+      valid: true,
+      room: buildRejoinRoomSummary(match.room),
+    } : { valid: false });
     return;
   }
 
@@ -491,6 +494,17 @@ function buildRoomMetadata(room) {
     maxPlayers: room.maxPlayers,
     status: room.status,
     hasPassword: Boolean(room.passwordRecord),
+  };
+}
+
+function buildRejoinRoomSummary(room) {
+  const metadata = buildRoomMetadata(room);
+
+  return {
+    roomId: metadata.roomId,
+    roomName: metadata.roomName,
+    currentPlayerCount: metadata.currentPlayerCount,
+    maxPlayers: metadata.maxPlayers,
   };
 }
 

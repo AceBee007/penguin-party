@@ -61,9 +61,16 @@ export interface RequestRejoinCodeResponse {
   rejoinCode: string;
 }
 
-export interface RejoinCodeStatusResponse {
-  valid: boolean;
+export interface RejoinRoomSummary {
+  roomId: string;
+  roomName: string;
+  currentPlayerCount: number;
+  maxPlayers: 6;
 }
+
+export type RejoinCodeStatusResponse =
+  | { valid: false }
+  | { valid: true; room: RejoinRoomSummary };
 
 export interface PlayerNameReservation {
   displayName: string;

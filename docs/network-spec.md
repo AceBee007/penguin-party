@@ -353,6 +353,18 @@ interface RequestRejoinCodeRequest {
 interface RequestRejoinCodeResponse {
   rejoinCode: string;
 }
+
+type RejoinCodeStatusResponse =
+  | { valid: false }
+  | {
+      valid: true;
+      room: {
+        roomId: RoomId;
+        roomName: string;
+        currentPlayerCount: number;
+        maxPlayers: 6;
+      };
+    };
 ```
 
 ルール:
@@ -363,9 +375,13 @@ interface RequestRejoinCodeResponse {
 - code は `randomString.expiryTimestampBase36` 形式とし、発行から30分の絶対期限を code 自体に含める
 - game が終了した時点で host は `/rooms/:roomId/rejoin-codes/invalidate` を呼び、全 code を無効化する
 - room が `waiting_for_start` へ戻るときも、全 re-join code を無効化する
-- client は発行された code と signaling server URL を local storage に保存する
-- 再訪時は code 内の期限を client で確認し、期限切れなら server へ問い合わせず code を削除する
-- 期限内の場合だけ保存済み server の `/rejoin/status` で有効性を確認し、有効な場合だけ再参加ボタンを表示する
+- client は発行されたcodeとsignaling server URLをcodeごとのlocal storage entryへ保存し、現在Tabの`rejoin-code` queryにも同じcodeを設定する
+- codeごとのstorage keyを使い、同一browser内の複数Tabが同時にcodeを追加しても互いを上書きしない
+- 再訪時はlocal storageの全codeと現在Tabのquery codeを収集する。query codeがstorageにない場合はURLの`signaling-server`を使う
+- code 内の期限を client で確認し、期限切れなら server へ問い合わせず code を削除する。現在Tabのqueryと一致する場合はqueryも同時に削除する
+- 期限内の場合だけcodeごとのserverの`/rejoin/status`で有効性とroom情報を確認し、有効な場合だけroom名、参加枠数 / 上限、再参加ボタンを表示する
+- queryだけに存在したcodeが有効ならlocal storageへ補完し、local storageを各Tab queryのsupersetに保つようbest effortで同期する
+- reload、Tab close、通信断ではcodeを削除せず、game終了または明示Leave時だけ現在Tabのstorage entryとqueryを削除する
 - server は re-join code の発行・状態確認・再参加・無効化操作の直前に、全 room の期限切れまたは不正形式 code を掃除する
 - 再参加ボタンを押したときだけ `POST /rejoin` を実行する
 - code に紐づく player がすでに接続中の場合、server は re-join を拒否する

@@ -19,7 +19,9 @@ import { PeerMeshClient } from '../network/peerMesh';
 import {
   checkRejoinCode,
   checkSignalingServer,
+  clearRejoinCodeQuery,
   createRoom,
+  getRejoinCodeQuery,
   getSignalingHttpUrl,
   getSignalingServerQueryUrl,
   invalidateGameRejoinCodes,
@@ -32,13 +34,15 @@ import {
   requestGameRejoinCode,
   releasePlayerNameReservation,
   resumeGame,
+  setRejoinCodeQuery,
   setSignalingServerQuery,
   validatePlayerName,
 } from '../network/signalingClient';
 import {
   clearStoredRejoinSession,
   getRejoinCodeExpiresAt,
-  readStoredRejoinSession,
+  isRejoinSessionStorageKey,
+  readStoredRejoinSessions,
   storeRejoinSession,
   type StoredRejoinSession,
 } from '../network/rejoinStorage';
@@ -62,6 +66,7 @@ import type {
   ReadyGateState,
   PeerSummary,
   PlayerCommand,
+  RejoinRoomSummary,
   RoomMetadata,
 } from '../network/types';
 
@@ -97,6 +102,11 @@ interface ScoreboardPlayerView {
   totalPenalty: number;
 }
 
+interface AvailableRejoinSession extends StoredRejoinSession {
+  isCurrentTab: boolean;
+  room: RejoinRoomSummary;
+}
+
 interface MultiplayerGameProps {
   locale: LocaleCode;
 }
@@ -107,13 +117,16 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
   const [game, setGame] = useState<GameSessionState | null>(null);
   const [peers, setPeers] = useState<PeerRuntimeView[]>([]);
   const [playerName, setPlayerName] = useState(() => readStoredPlayerName());
-  const [storedRejoinSession, setStoredRejoinSession] = useState<StoredRejoinSession | null>(() =>
-    readStoredRejoinSession(),
+  const [storedRejoinSessions, setStoredRejoinSessions] = useState<StoredRejoinSession[]>(() =>
+    readStoredRejoinSessions(),
   );
-  const [isStoredRejoinAvailable, setIsStoredRejoinAvailable] = useState(false);
-  const [isRejoining, setIsRejoining] = useState(false);
+  const [tabRejoinCode, setTabRejoinCode] = useState(() => getRejoinCodeQuery());
+  const [availableRejoinSessions, setAvailableRejoinSessions] = useState<AvailableRejoinSession[]>([]);
+  const [rejoiningCode, setRejoiningCode] = useState<string | null>(null);
   const [signalingServerUrl, setSignalingServerUrl] = useState(
-    () => getSignalingServerQueryUrl() ?? storedRejoinSession?.signalingServerUrl ?? getSignalingHttpUrl(),
+    () => getSignalingServerQueryUrl()
+      ?? storedRejoinSessions.find((session) => session.rejoinCode === tabRejoinCode)?.signalingServerUrl
+      ?? getSignalingHttpUrl(),
   );
   const [connectedSignalingServerUrl, setConnectedSignalingServerUrl] = useState<string | null>(null);
   const [signalingConnectionStatus, setSignalingConnectionStatus] =
@@ -166,6 +179,31 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
   );
   const landingMessage = getLandingMessage(hasLandingStartInput, signalingConnectionStatus, message);
   const roomItems = useMemo(() => rooms.map(toRoomListItem), [rooms]);
+  const rejoinCandidates = useMemo(() => {
+    const sessionsByCode = new Map(
+      storedRejoinSessions.map((session) => [session.rejoinCode, session]),
+    );
+
+    if (tabRejoinCode) {
+      const storedSession = sessionsByCode.get(tabRejoinCode);
+      sessionsByCode.set(tabRejoinCode, storedSession ?? {
+        rejoinCode: tabRejoinCode,
+        signalingServerUrl: getSignalingServerQueryUrl() ?? signalingServerUrl,
+      });
+    }
+
+    return [...sessionsByCode.values()].sort((left, right) => {
+      const leftIsCurrentTab = left.rejoinCode === tabRejoinCode;
+      const rightIsCurrentTab = right.rejoinCode === tabRejoinCode;
+
+      if (leftIsCurrentTab !== rightIsCurrentTab) {
+        return leftIsCurrentTab ? -1 : 1;
+      }
+
+      return (getRejoinCodeExpiresAt(left.rejoinCode) ?? 0)
+        - (getRejoinCodeExpiresAt(right.rejoinCode) ?? 0);
+    });
+  }, [signalingServerUrl, storedRejoinSessions, tabRejoinCode]);
 
   useEffect(() => {
     if (!identity && scene === 'landing_page') {
@@ -177,6 +215,18 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
   useEffect(() => {
     identityRef.current = identity;
   }, [identity]);
+
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.storageArea === window.localStorage && (event.key === null || isRejoinSessionStorageKey(event.key))) {
+        setStoredRejoinSessions(readStoredRejoinSessions());
+      }
+    };
+
+    window.addEventListener('storage', handleStorage);
+
+    return () => window.removeEventListener('storage', handleStorage);
+  }, []);
 
   useEffect(() => {
     if (isPlayerNameValid && typeof window.localStorage.setItem === 'function') {
@@ -294,7 +344,8 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       return;
     }
 
-    const autoConnectUrl = getSignalingServerQueryUrl() ?? storedRejoinSession?.signalingServerUrl ?? null;
+    const tabStoredSession = storedRejoinSessions.find((session) => session.rejoinCode === tabRejoinCode);
+    const autoConnectUrl = getSignalingServerQueryUrl() ?? tabStoredSession?.signalingServerUrl ?? null;
 
     if (!autoConnectUrl || autoSignalingConnectAttemptedUrl === autoConnectUrl) {
       return;
@@ -302,62 +353,121 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
 
     autoSignalingConnectAttemptedUrl = autoConnectUrl;
     void handleConnectSignalingServer();
-  }, [handleConnectSignalingServer, identity, scene, storedRejoinSession?.signalingServerUrl]);
+  }, [handleConnectSignalingServer, identity, scene, storedRejoinSessions, tabRejoinCode]);
 
   useEffect(() => {
-    if (identity || scene !== 'landing_page' || !storedRejoinSession || !connectedSignalingServerUrl) {
-      setIsStoredRejoinAvailable(false);
+    if (identity || scene !== 'landing_page') {
+      setAvailableRejoinSessions([]);
       return undefined;
     }
 
-    if (storedRejoinSession.signalingServerUrl !== connectedSignalingServerUrl) {
-      setIsStoredRejoinAvailable(false);
-      return undefined;
+    if (tabRejoinCode) {
+      setRejoinCodeQuery(tabRejoinCode);
     }
 
-    const expiresAt = getRejoinCodeExpiresAt(storedRejoinSession.rejoinCode);
+    const now = Date.now();
+    const expiredCodes = rejoinCandidates
+      .filter((session) => (getRejoinCodeExpiresAt(session.rejoinCode) ?? 0) <= now)
+      .map((session) => session.rejoinCode);
+    const expiredCodeSet = new Set(expiredCodes);
+    const liveCandidates = rejoinCandidates.filter((session) => !expiredCodeSet.has(session.rejoinCode));
 
-    if (expiresAt === null || expiresAt <= Date.now()) {
-      clearStoredRejoinSession(storedRejoinSession.rejoinCode);
-      setStoredRejoinSession(null);
-      setIsStoredRejoinAvailable(false);
-      return undefined;
+    for (const rejoinCode of expiredCodes) {
+      clearStoredRejoinSession(rejoinCode);
+    }
+
+    if (expiredCodeSet.has(tabRejoinCode ?? '')) {
+      clearRejoinCodeQuery(tabRejoinCode ?? undefined);
+      setTabRejoinCode(null);
+    }
+
+    if (expiredCodes.length > 0) {
+      setStoredRejoinSessions((current) =>
+        current.filter((session) => !expiredCodeSet.has(session.rejoinCode)),
+      );
     }
 
     let cancelled = false;
     let expiryTimeoutId: number | null = null;
-    setIsStoredRejoinAvailable(false);
+    setAvailableRejoinSessions([]);
 
-    void checkRejoinCode({ rejoinCode: storedRejoinSession.rejoinCode }, connectedSignalingServerUrl)
-      .then(({ valid }) => {
+    void Promise.all(liveCandidates.map(async (session) => {
+      try {
+        return {
+          session,
+          status: await checkRejoinCode({ rejoinCode: session.rejoinCode }, session.signalingServerUrl),
+        };
+      } catch {
+        return { session, status: null };
+      }
+    })).then((results) => {
         if (cancelled) {
           return;
         }
 
-        if (valid) {
-          const remainingMs = expiresAt - Date.now();
+        const invalidCodes = results
+          .filter(({ status }) => status?.valid === false)
+          .map(({ session }) => session.rejoinCode);
+        const invalidCodeSet = new Set(invalidCodes);
 
-          if (remainingMs <= 0) {
-            clearStoredRejoinSession(storedRejoinSession.rejoinCode);
-            setStoredRejoinSession(null);
-            return;
-          }
-
-          setIsStoredRejoinAvailable(true);
-          expiryTimeoutId = window.setTimeout(() => {
-            clearStoredRejoinSession(storedRejoinSession.rejoinCode);
-            setStoredRejoinSession(null);
-            setIsStoredRejoinAvailable(false);
-          }, remainingMs);
-          return;
+        for (const rejoinCode of invalidCodes) {
+          clearStoredRejoinSession(rejoinCode);
         }
 
-        clearStoredRejoinSession(storedRejoinSession.rejoinCode);
-        setStoredRejoinSession(null);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setIsStoredRejoinAvailable(false);
+        if (invalidCodeSet.has(tabRejoinCode ?? '')) {
+          clearRejoinCodeQuery(tabRejoinCode ?? undefined);
+          setTabRejoinCode(null);
+        }
+
+        if (invalidCodes.length > 0) {
+          setStoredRejoinSessions((current) =>
+            current.filter((session) => !invalidCodeSet.has(session.rejoinCode)),
+          );
+        }
+
+        const checkedAt = Date.now();
+        const availableSessions = results.flatMap<AvailableRejoinSession>(({ session, status }) => {
+          const expiresAt = getRejoinCodeExpiresAt(session.rejoinCode) ?? 0;
+
+          if (!status?.valid || expiresAt <= checkedAt) {
+            return [];
+          }
+
+          storeRejoinSession(session);
+          return [{
+            ...session,
+            isCurrentTab: session.rejoinCode === tabRejoinCode,
+            room: status.room,
+          }];
+        });
+
+        setAvailableRejoinSessions(availableSessions);
+
+        const nextExpiresAt = Math.min(
+          ...availableSessions.map((session) => getRejoinCodeExpiresAt(session.rejoinCode) ?? Number.POSITIVE_INFINITY),
+        );
+
+        if (Number.isFinite(nextExpiresAt)) {
+          expiryTimeoutId = window.setTimeout(() => {
+            const expiredAtTimeout = availableSessions
+              .filter((session) => (getRejoinCodeExpiresAt(session.rejoinCode) ?? 0) <= Date.now())
+              .map((session) => session.rejoinCode);
+            const expiredAtTimeoutSet = new Set(expiredAtTimeout);
+
+            for (const rejoinCode of expiredAtTimeout) {
+              clearStoredRejoinSession(rejoinCode);
+            }
+
+            if (expiredAtTimeoutSet.has(tabRejoinCode ?? '')) {
+              clearRejoinCodeQuery(tabRejoinCode ?? undefined);
+              setTabRejoinCode(null);
+            }
+
+            setStoredRejoinSessions(readStoredRejoinSessions());
+            setAvailableRejoinSessions((current) =>
+              current.filter((session) => !expiredAtTimeoutSet.has(session.rejoinCode)),
+            );
+          }, Math.max(0, nextExpiresAt - Date.now()));
         }
       });
 
@@ -368,7 +478,43 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
         window.clearTimeout(expiryTimeoutId);
       }
     };
-  }, [connectedSignalingServerUrl, identity, scene, storedRejoinSession]);
+  }, [identity, rejoinCandidates, scene, tabRejoinCode]);
+
+  const discardRejoinSession = useCallback((rejoinCode: string) => {
+    clearStoredRejoinSession(rejoinCode);
+
+    if (getRejoinCodeQuery() === rejoinCode) {
+      clearRejoinCodeQuery(rejoinCode);
+      setTabRejoinCode(null);
+    }
+
+    setStoredRejoinSessions((current) =>
+      current.filter((session) => session.rejoinCode !== rejoinCode),
+    );
+    setAvailableRejoinSessions((current) =>
+      current.filter((session) => session.rejoinCode !== rejoinCode),
+    );
+  }, []);
+
+  const removeCurrentTabRejoinSession = useCallback((identityRejoinCode?: string) => {
+    const queryRejoinCode = getRejoinCodeQuery();
+    const rejoinCodes = new Set(
+      [identityRejoinCode, queryRejoinCode].filter((code): code is string => Boolean(code)),
+    );
+
+    for (const rejoinCode of rejoinCodes) {
+      clearStoredRejoinSession(rejoinCode);
+    }
+
+    clearRejoinCodeQuery();
+    setTabRejoinCode(null);
+    setStoredRejoinSessions((current) =>
+      current.filter((session) => !rejoinCodes.has(session.rejoinCode)),
+    );
+    setAvailableRejoinSessions((current) =>
+      current.filter((session) => !rejoinCodes.has(session.rejoinCode)),
+    );
+  }, []);
 
   useEffect(() => {
     if (identity || scene !== 'matchmaking_lobby') {
@@ -554,9 +700,7 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     }
 
     const currentIdentity = identityRef.current;
-    clearStoredRejoinSession();
-    setStoredRejoinSession(null);
-    setIsStoredRejoinAvailable(false);
+    removeCurrentTabRejoinSession(currentIdentity?.rejoinCode);
 
     if (currentIdentity?.rejoinCode) {
       const nextIdentity = { ...currentIdentity, rejoinCode: undefined };
@@ -575,7 +719,7 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
         invalidatedRejoinGameIdRef.current = null;
       });
     }
-  }, [connectedSignalingServerUrl, game?.gameId, game?.status, hostPeerId]);
+  }, [connectedSignalingServerUrl, game?.gameId, game?.status, hostPeerId, removeCurrentTabRejoinSession]);
 
   useEffect(() => {
     if (!isBoardMaximized) {
@@ -658,8 +802,8 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     }
   }, [currentScene]);
 
-  const startMesh = useCallback((nextIdentity: NetworkIdentity) => {
-    const signalingHttpUrl = connectedSignalingServerUrl;
+  const startMesh = useCallback((nextIdentity: NetworkIdentity, requestedSignalingHttpUrl?: string) => {
+    const signalingHttpUrl = requestedSignalingHttpUrl ?? connectedSignalingServerUrl;
 
     if (!signalingHttpUrl) {
       setMessage(t('message.connectBeforeJoin'));
@@ -742,31 +886,43 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     }
   }, [connectedSignalingServerUrl, isPlayerNameValid, refreshOpenRooms, trimmedPlayerName]);
 
-  const handleRejoinGame = useCallback(async () => {
-    if (!connectedSignalingServerUrl || !storedRejoinSession || !isStoredRejoinAvailable) {
+  const handleRejoinGame = useCallback(async (session: AvailableRejoinSession) => {
+    if ((getRejoinCodeExpiresAt(session.rejoinCode) ?? 0) <= Date.now()) {
+      discardRejoinSession(session.rejoinCode);
       return;
     }
 
-    setIsRejoining(true);
+    setRejoiningCode(session.rejoinCode);
 
     try {
       const nextIdentity = await resumeGame(
-        { rejoinCode: storedRejoinSession.rejoinCode },
-        connectedSignalingServerUrl,
+        { rejoinCode: session.rejoinCode },
+        session.signalingServerUrl,
       );
+      const nextStoredSession = {
+        rejoinCode: session.rejoinCode,
+        signalingServerUrl: session.signalingServerUrl,
+      };
+
+      storeRejoinSession(nextStoredSession);
+      setStoredRejoinSessions((current) => upsertStoredRejoinSession(current, nextStoredSession));
+      setRejoinCodeQuery(session.rejoinCode);
+      setTabRejoinCode(session.rejoinCode);
+      setSignalingServerQuery(session.signalingServerUrl);
+      setSignalingServerUrl(session.signalingServerUrl);
+      setConnectedSignalingServerUrl(session.signalingServerUrl);
+      setSignalingConnectionStatus('connected');
       setPlayerName(nextIdentity.displayName);
-      setIsStoredRejoinAvailable(false);
+      setAvailableRejoinSessions([]);
       setMessage(t('message.resumedRoom', { roomId: nextIdentity.room.roomId }));
-      startMesh(nextIdentity);
+      startMesh(nextIdentity, session.signalingServerUrl);
     } catch (error) {
-      clearStoredRejoinSession(storedRejoinSession.rejoinCode);
-      setStoredRejoinSession(null);
-      setIsStoredRejoinAvailable(false);
+      discardRejoinSession(session.rejoinCode);
       setMessage(error instanceof Error ? error.message : t('message.rejoinFailed'));
     } finally {
-      setIsRejoining(false);
+      setRejoiningCode(null);
     }
-  }, [connectedSignalingServerUrl, isStoredRejoinAvailable, startMesh, storedRejoinSession]);
+  }, [discardRejoinSession, startMesh]);
 
   const handleCreateRoom = useCallback(async () => {
     if (!isPlayerNameValid) {
@@ -870,6 +1026,12 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
   }, [handleJoinRoom]);
 
   const handleLeaveRoom = useCallback(() => {
+    const leavingIdentity = identityRef.current;
+
+    if (leavingIdentity?.room.status === 'playing' || leavingIdentity?.rejoinCode) {
+      removeCurrentTabRejoinSession(leavingIdentity.rejoinCode);
+    }
+
     lastRoomLeaveAtRef.current = Date.now();
     setIsLeaveConfirmOpen(false);
     setIsScoreboardExpanded(false);
@@ -891,7 +1053,7 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     if (isPlayerNameValid) {
       void refreshNameReservation(trimmedPlayerName);
     }
-  }, [isPlayerNameValid, refreshOpenRooms, trimmedPlayerName]);
+  }, [isPlayerNameValid, refreshOpenRooms, removeCurrentTabRejoinSession, trimmedPlayerName]);
 
   const handleLeaveClick = useCallback(() => {
     if (gameRef.current) {
@@ -1010,17 +1172,6 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
             >
               {t('button.start')}
             </button>
-            {isStoredRejoinAvailable ? (
-              <button
-                className="landing-form__rejoin-button"
-                data-rejoin-game
-                type="button"
-                disabled={isRejoining}
-                onClick={() => void handleRejoinGame()}
-              >
-                {t('button.rejoinGame')}
-              </button>
-            ) : null}
             <label className="player-name-field signaling-server-field">
               {t('field.signalingServer')}
               <input
@@ -1047,6 +1198,43 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
               {signalingConnectionLabel}
             </p>
           </div>
+          {availableRejoinSessions.length > 0 ? (
+            <section className="rejoin-session-list" aria-label={t('rejoin.availableGames')} data-rejoin-session-list>
+              <h2>{t('rejoin.availableGames')}</h2>
+              <div className="rejoin-session-list__items">
+                {availableRejoinSessions.map((session) => (
+                  <article
+                    className="rejoin-session-card"
+                    data-current-tab={session.isCurrentTab ? 'true' : 'false'}
+                    data-rejoin-room-id={session.room.roomId}
+                    key={session.rejoinCode}
+                  >
+                    <div className="rejoin-session-card__room">
+                      <strong>{session.room.roomName}</strong>
+                      <span>
+                        {t('rejoin.playerCount', {
+                          count: session.room.currentPlayerCount,
+                          max: session.room.maxPlayers,
+                        })}
+                      </span>
+                    </div>
+                    {session.isCurrentTab ? (
+                      <span className="rejoin-session-card__current">{t('rejoin.currentTab')}</span>
+                    ) : null}
+                    <button
+                      data-rejoin-game
+                      data-rejoin-current-tab={session.isCurrentTab ? 'true' : 'false'}
+                      type="button"
+                      disabled={rejoiningCode !== null}
+                      onClick={() => void handleRejoinGame(session)}
+                    >
+                      {t('button.rejoinGame')}
+                    </button>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : null}
           <p className="lobby-message" data-game-message>
             {landingMessage}
           </p>
@@ -1749,8 +1937,10 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
       };
       identityRef.current = nextIdentity;
       storeRejoinSession(nextStoredRejoinSession);
-      setStoredRejoinSession(nextStoredRejoinSession);
-      setIsStoredRejoinAvailable(false);
+      setStoredRejoinSessions((current) => upsertStoredRejoinSession(current, nextStoredRejoinSession));
+      setRejoinCodeQuery(nextRejoinCode);
+      setTabRejoinCode(nextRejoinCode);
+      setAvailableRejoinSessions([]);
       setIdentity(nextIdentity);
       return nextIdentity;
     } catch (error) {
@@ -1797,9 +1987,7 @@ export function MultiplayerGame({ locale }: MultiplayerGameProps) {
     gameRef.current = null;
     hostPeerIdRef.current = nextHostPeerId;
     meshRef.current?.setHostPeerId(nextHostPeerId);
-    clearStoredRejoinSession();
-    setStoredRejoinSession(null);
-    setIsStoredRejoinAvailable(false);
+    removeCurrentTabRejoinSession(currentIdentity.rejoinCode);
     setIdentity(waitingIdentity);
     setGame(null);
     setHostPeerId(nextHostPeerId);
@@ -2319,6 +2507,18 @@ function createCommandId(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `command-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function upsertStoredRejoinSession(
+  sessions: StoredRejoinSession[],
+  nextSession: StoredRejoinSession,
+): StoredRejoinSession[] {
+  return [
+    ...sessions.filter((session) => session.rejoinCode !== nextSession.rejoinCode),
+    nextSession,
+  ].sort((left, right) =>
+    (getRejoinCodeExpiresAt(left.rejoinCode) ?? 0) - (getRejoinCodeExpiresAt(right.rejoinCode) ?? 0),
+  );
 }
 
 function readStoredPlayerName(): string {

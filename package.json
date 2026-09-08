@@ -14,7 +14,9 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:all": "npm run test && npm run test:e2e"
+    "test:all": "npm run test && npm run test:e2e",
+    "storybook": "storybook dev -p ${STORYBOOK_PORT:-6006} --host ${STORYBOOK_HOST:-0.0.0.0}",
+    "build-storybook": "storybook build"
   },
   "dependencies": {
     "pixi.js": "^8.18.1",
@@ -24,14 +26,18 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
+    "@storybook/addon-a11y": "^10.5.5",
+    "@storybook/addon-docs": "^10.5.5",
+    "@storybook/react-vite": "^10.5.5",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
-    "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.2",
     "@vitest/coverage-v8": "^4.1.7",
     "jsdom": "^29.1.1",
     "sass": "^1.100.0",
+    "storybook": "^10.5.5",
     "typescript": "^6.0.3",
     "vite": "^8.0.14",
     "vitest": "^4.1.7"

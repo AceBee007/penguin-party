@@ -103,11 +103,13 @@
 - re-join code は `randomString.expiryTimestampBase36` 形式で生成し、有効期限を code 自体に含める。
 - 有効期限は生成から最大30分で、game が先に終了した場合はその時点で無効化する。
 - re-join code は player identity に紐づき、room / game が進行中の場合に同じ player として復帰するために使う。
-- client は再訪時に code 内の期限を確認し、期限切れなら server へ問い合わせず削除する。期限内の場合だけ server へ有効性を問い合わせる。
+- client はcodeごとに独立したlocal storage entryを使い、同一browserの複数Tabのcodeを共存させる。各TabのURL queryにはそのTab専用codeだけを保持する。
+- client は再訪時に local storage の全codeと現在Tabのquery codeを集め、code 内の期限を確認する。期限切れなら server へ問い合わせず削除し、期限内の場合だけ保存されたserverへ有効性を問い合わせる。
+- queryにだけ存在するcodeも通常フローで検証し、有効ならlocal storageへ補完する。
 - server は次の re-join code 操作時に、全 room の期限切れ code を掃除する。
-- 有効な code がある場合だけ Landing page に再参加ボタンを表示し、押下時に以前の display name と playerId で game に resume する。
+- 有効なcodeごとにLanding pageへroom名、参加枠数 / 上限、再参加ボタンを表示し、現在Tabのcodeは先頭かつ薄い水色で強調する。押下時に以前の display name と playerId で game に resume する。
 - 手入力欄は表示せず、期限切れ、存在しない、または終了済み game の code では再参加ボタンを表示しない。
-- game 終了時に local storage の code を削除し、次の game 開始時に新しい code を保存する。
+- game 終了または明示Leave時に現在Tabのlocal storage entryとquery codeを同時に削除し、reload、Tab close、通信断では保持する。次の game 開始時に新しい code を両方へ保存する。
 
 ## 検証
 

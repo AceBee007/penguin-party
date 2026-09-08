@@ -176,6 +176,11 @@
       "waitingRoomNeedsPlayers": "At least 2 players are required to start."
     }
   },
+  "rejoin": {
+    "availableGames": "Games available to re-join",
+    "currentTab": "This tab",
+    "playerCount": "{count} / {max} players"
+  },
   "role": {
     "host": "host",
     "player": "player",

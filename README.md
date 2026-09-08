@@ -27,6 +27,22 @@ Port environment variables:
 - `VITE_SIGNALING_PORT`: browser client signaling target port. Use this with `npm run dev` when `SIGNALING_PORT` is changed.
 - `VITE_SIGNALING_URL`: browser client signaling target URL. If set, it takes precedence over `VITE_SIGNALING_PORT`.
 
+## Storybook
+
+Run Storybook to inspect pages and components in isolation:
+
+```sh
+npm run storybook
+```
+
+Storybook is available at `http://127.0.0.1:6006` by default. Use the toolbar to switch between English and Japanese. Set `STORYBOOK_HOST` or `STORYBOOK_PORT` to change its bind address or port.
+
+Build the static Storybook bundle with:
+
+```sh
+npm run build-storybook
+```
+
 ## Checks
 
 ```sh

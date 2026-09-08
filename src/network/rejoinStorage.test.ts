@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  clearAllStoredRejoinSessions,
   clearStoredRejoinSession,
   getRejoinCodeExpiresAt,
-  readStoredRejoinSession,
+  getRejoinSessionStorageKey,
+  readStoredRejoinSessions,
   REJOIN_SESSION_STORAGE_KEY,
   storeRejoinSession,
 } from './rejoinStorage';
@@ -12,40 +14,57 @@ describe('rejoinStorage', () => {
     window.localStorage.clear();
   });
 
-  it('stores and reads a live re-join session', () => {
-    const session = {
-      rejoinCode: code(31_000),
-      signalingServerUrl: 'http://127.0.0.1:15201',
-    };
+  it('stores multiple live sessions without overwriting another tab', () => {
+    const sessions = [
+      session('tab-one', 'http://127.0.0.1:15201'),
+      session('tab-two', 'http://127.0.0.1:15202'),
+    ];
 
-    storeRejoinSession(session);
+    sessions.forEach(storeRejoinSession);
 
-    expect(readStoredRejoinSession(1_000)).toEqual(session);
+    expect(readStoredRejoinSessions()).toEqual(sessions);
+    expect(window.localStorage).toHaveLength(2);
   });
 
-  it('removes expired and malformed sessions', () => {
-    storeRejoinSession({
-      rejoinCode: code(1_000),
-      signalingServerUrl: 'http://127.0.0.1:15201',
-    });
+  it('clears only the selected code', () => {
+    const first = session('tab-one', 'http://127.0.0.1:15201');
+    const second = session('tab-two', 'http://127.0.0.1:15201');
+    storeRejoinSession(first);
+    storeRejoinSession(second);
 
-    expect(readStoredRejoinSession(1_000)).toBeNull();
-    expect(window.localStorage.getItem(REJOIN_SESSION_STORAGE_KEY)).toBeNull();
+    clearStoredRejoinSession(first.rejoinCode);
 
-    window.localStorage.setItem(REJOIN_SESSION_STORAGE_KEY, '{not-json');
-    expect(readStoredRejoinSession()).toBeNull();
-    expect(window.localStorage.getItem(REJOIN_SESSION_STORAGE_KEY)).toBeNull();
+    expect(readStoredRejoinSessions()).toEqual([second]);
   });
 
-  it('does not clear a newer session when an older request finishes late', () => {
-    storeRejoinSession({
-      rejoinCode: code(Date.now() + 30_000, 'new-code'),
-      signalingServerUrl: 'http://127.0.0.1:15201',
-    });
+  it('removes expired and malformed per-code entries', () => {
+    const now = Date.now();
+    const expired = session('expired', 'http://127.0.0.1:15201', now - 1);
+    const malformedKey = `${REJOIN_SESSION_STORAGE_KEY}.malformed`;
+    window.localStorage.setItem(getRejoinSessionStorageKey(expired.rejoinCode), JSON.stringify(expired));
+    window.localStorage.setItem(malformedKey, '{not-json');
 
-    clearStoredRejoinSession(code(Date.now() + 30_000, 'old-code'));
+    expect(readStoredRejoinSessions(now)).toEqual([]);
+    expect(window.localStorage).toHaveLength(0);
+  });
 
-    expect(readStoredRejoinSession()?.rejoinCode).toContain('new-code.');
+  it('migrates the previous single-session value', () => {
+    const legacySession = session('legacy', 'http://127.0.0.1:15201');
+    window.localStorage.setItem(REJOIN_SESSION_STORAGE_KEY, JSON.stringify(legacySession));
+
+    expect(readStoredRejoinSessions()).toEqual([legacySession]);
+    expect(window.localStorage.getItem(REJOIN_SESSION_STORAGE_KEY)).toBeNull();
+    expect(window.localStorage.getItem(getRejoinSessionStorageKey(legacySession.rejoinCode))).not.toBeNull();
+  });
+
+  it('clears every current and legacy session when explicitly requested', () => {
+    const current = session('current', 'http://127.0.0.1:15201');
+    storeRejoinSession(current);
+    window.localStorage.setItem(REJOIN_SESSION_STORAGE_KEY, JSON.stringify(session('legacy', 'http://127.0.0.1:15201')));
+
+    clearAllStoredRejoinSessions();
+
+    expect(window.localStorage).toHaveLength(0);
   });
 
   it('reads the expiry timestamp embedded in a code', () => {
@@ -54,6 +73,13 @@ describe('rejoinStorage', () => {
     expect(getRejoinCodeExpiresAt('random.not-valid!')).toBeNull();
   });
 });
+
+function session(random: string, signalingServerUrl: string, expiresAt = Date.now() + 30_000) {
+  return {
+    rejoinCode: code(expiresAt, random),
+    signalingServerUrl,
+  };
+}
 
 function code(expiresAt: number, random = 'random'): string {
   return `${random}.${expiresAt.toString(36)}`;

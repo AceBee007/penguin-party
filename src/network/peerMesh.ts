@@ -181,13 +181,7 @@ export class PeerMeshClient {
     }
 
     if (message.type === 'answer') {
-      const record = this.connections.get(message.fromPeerId);
-
-      if (record) {
-        void record.connection.setRemoteDescription(message.description).then(() => {
-          void this.flushQueuedIceCandidates(message.fromPeerId);
-        });
-      }
+      void this.acceptAnswer(message.fromPeerId, message.description);
       return;
     }
 
@@ -305,6 +299,31 @@ export class PeerMeshClient {
       toPeerId: peer.peerId,
       description: answer,
     });
+  }
+
+  private async acceptAnswer(peerId: string, description: RTCSessionDescriptionInit): Promise<void> {
+    const record = this.connections.get(peerId);
+
+    // A duplicate or delayed answer from a connection replaced during re-join is no longer applicable.
+    if (!record || record.connection.signalingState !== 'have-local-offer') {
+      return;
+    }
+
+    try {
+      await record.connection.setRemoteDescription(description);
+
+      if (this.connections.get(peerId) === record) {
+        await this.flushQueuedIceCandidates(peerId);
+      }
+    } catch {
+      if (
+        this.connections.get(peerId) === record &&
+        hasPendingSignalingNegotiation(record.connection)
+      ) {
+        record.status = 'disconnected';
+        this.publishPeers();
+      }
+    }
   }
 
   private attachDataChannel(record: PeerConnectionRecord, channel: RTCDataChannel): void {
@@ -452,6 +471,10 @@ function mapConnectionStatus(state: RTCPeerConnectionState): PeerConnectionStatu
   }
 
   return 'connecting';
+}
+
+function hasPendingSignalingNegotiation(connection: RTCPeerConnection): boolean {
+  return connection.signalingState !== 'stable' && connection.signalingState !== 'closed';
 }
 
 function parseEnvelope(data: unknown): P2PEnvelope | null {

@@ -40,8 +40,12 @@ interface LocaleAwareProps {
   locale: LocaleCode;
 }
 
-function LocalGame({ locale }: LocaleAwareProps) {
-  const [game, setGame] = useState(createInitialLocalGame);
+interface LocalGameProps extends LocaleAwareProps {
+  initialGame?: ReturnType<typeof createLocalGame>;
+}
+
+export function LocalGame({ locale, initialGame }: LocalGameProps) {
+  const [game, setGame] = useState(() => initialGame ?? createInitialLocalGame());
   const [message, setMessage] = useState(t('message.initialLocal'));
   const activePlayer = getActivePlayer(game);
   const activePlayerId = activePlayer?.playerId ?? null;

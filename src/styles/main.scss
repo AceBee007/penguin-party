@@ -723,10 +723,6 @@ button {
   grid-column: 3;
 }
 
-.landing-form__rejoin-button {
-  grid-column: 1 / -1;
-}
-
 .landing-form__connect-button {
   min-height: 40px;
 }
@@ -745,6 +741,69 @@ button {
   &[data-status="error"] {
     color: #9f2b2b;
   }
+}
+
+.rejoin-session-list {
+  display: grid;
+  gap: 10px;
+  width: min(100%, 760px);
+  padding: 16px;
+  border: 1px solid rgba(23, 49, 58, 0.14);
+  border-radius: 8px;
+  background: #fffaf0;
+
+  h2 {
+    margin: 0;
+    font-size: 16px;
+  }
+}
+
+.rejoin-session-list__items {
+  display: grid;
+  gap: 8px;
+}
+
+.rejoin-session-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(23, 49, 58, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+
+  &[data-current-tab="true"] {
+    border-color: rgba(47, 128, 237, 0.34);
+    background: #e8f7fb;
+  }
+}
+
+.rejoin-session-card__room {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+
+  strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  span {
+    color: #5e6d72;
+    font-size: 12px;
+    font-weight: 800;
+  }
+}
+
+.rejoin-session-card__current {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(47, 128, 237, 0.12);
+  color: #1e5f9e;
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .player-name-field,
@@ -1160,6 +1219,11 @@ button {
     padding: 12px;
   }
 
+  .landing-page__language {
+    position: static;
+    justify-self: end;
+  }
+
   .brand__title {
     font-size: 16px;
   }
@@ -1182,10 +1246,17 @@ button {
 
   .landing-form__connect-button,
   .landing-form__player-name,
-  .landing-form__rejoin-button,
   .landing-form__start-button,
   .signaling-server-field {
     grid-column: auto;
+  }
+
+  .rejoin-session-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+
+    button {
+      grid-column: 1 / -1;
+    }
   }
 
   .matchmaking-lobby {

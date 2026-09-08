@@ -139,7 +139,7 @@ interface ConnectionIndicatorView {
 
 起動直後に表示する最初の画面です。
 ゲームタイトル、プレイヤー名設定、signaling server 接続欄、「Start」ボタンを表示し、room 一覧は表示しません。
-local storage に有効な re-join code がある場合だけ、「前のゲームに再参加」ボタンも表示します。
+local storageまたは現在TabのURL queryに有効なre-join codeがある場合は、codeごとのroom情報と「前のゲームに再参加」ボタンも表示します。
 
 ### レイアウト
 
@@ -147,9 +147,13 @@ local storage に有効な re-join code がある場合だけ、「前のゲー�
                                       [Language v]
 Penguin Party
 [Player_a3f91c____________]
-[Start] [前のゲームに再参加（有効な場合のみ）]
+[Start]
 
 [http://127.0.0.1:15201____] [接続]
+
+再参加できるゲーム
+┌ Penguin Table      3 / 6  このタブ  [前のゲームに再参加] ┐  <- 薄い水色
+└ Snow Room          4 / 6             [前のゲームに再参加] ┘
 ```
 
 ### 言語選択
@@ -227,8 +231,9 @@ Validation:
 
 - `接続`: signaling server 欄の URL へ接続確認を行う
 - `Start`: プレイヤー名が valid かつ signaling server への接続確認が成功済みなら `matchmaking_lobby` へ遷移する
-- `前のゲームに再参加`: 保存済み code が server で有効と確認できた場合だけ表示し、押下時に以前の player name、playerId、手札、手番状態で `game_play` へ遷移する
-- re-join に失敗した場合は保存済み code を削除し、ボタンを非表示にする
+- `前のゲームに再参加`: code が server で有効と確認できた候補ごとに表示し、押下時に以前の player name、playerId、手札、手番状態で `game_play` へ遷移する
+- 現在Tabの`rejoin-code` queryと一致する候補を先頭に並べ、薄い水色の背景と「このタブ」表示で区別する
+- re-join に失敗した場合は該当codeだけをlocal storageから削除し、現在Tabのqueryと一致する場合はqueryも同時に削除する
 
 ### Signaling server 入力
 
@@ -266,16 +271,21 @@ interface StoredRejoinSession {
 
 保存・表示ルール:
 
-- 最初のラウンドへ入った時点で、各 player client は signaling server から game 用 code を受け取り local storage に保存する
+- 最初のラウンドへ入った時点で、各player clientはsignaling serverからgame用codeを受け取り、codeごとのlocal storage entryと現在Tabの`rejoin-code` URL queryへ同時に保存する
+- local storageには同一browser内の全Tabのcodeを共存させ、現在TabのqueryにはそのTab専用codeを1件だけ保持する
+- codeごとのstorage keyにより、複数Tabの同時保存で他Tabのcodeを上書きしない
 - code は `randomString.expiryTimestampBase36` 形式で最大30分の期限を自身に含み、game が先に終了した場合は game 終了時点までとする
-- 再訪時は code 内の期限を先に確認し、期限切れなら server へ接続せず local storage から削除する
-- 期限内の場合だけ保存済み signaling server へ自動接続し、code の有効性を問い合わせる
-- code が有効な場合だけ Landing page に「前のゲームに再参加」ボタンを表示する
-- code がない、local expiry 済み、または server side で無効な場合はボタンを表示せず、無効な保存値を削除する
+- 再訪時はlocal storageの全codeに現在Tabのquery codeを加えて評価する。query codeがstorageにない場合もURLのsignaling serverで通常フローを実行する
+- code 内の期限を先に確認し、期限切れならserverへ問い合わせずlocal storageから削除する。現在Tabのquery codeならqueryも削除する
+- 期限内の場合だけcodeごとのsignaling serverへ有効性とroom情報を問い合わせる
+- code が有効な場合だけ Landing page にroom名、参加枠数 / 上限、「前のゲームに再参加」ボタンを表示する。一時切断playerも通常の参加者として人数へ含める
+- queryだけに存在したcodeが有効ならlocal storageへ補完し、local storageが全Tab query codeのsupersetになるようbest effortで維持する
+- code がない、local expiry 済み、または server side で無効な場合は候補を表示せず、該当する無効値だけを削除する
 - ボタン押下時だけ resume を実行し、成功時は以前の display name、playerId、hand、現在の game state を復元する
-- game 終了時または `waiting_room` / `waiting_for_start` に戻った時点で local storage から削除する
+- reload、Tab close、通信断ではcodeを保持する
+- game終了、明示Leave、または`waiting_room` / `waiting_for_start`に戻った時点で、現在Tabのlocal storage entryとqueryを同時に削除する
 - 同じ room が次の game を始める場合、前 game の code は使わず、新しい code を発行して保存し直す
-- code の手入力欄や `rejoin` URL query は使用しない
+- code の手入力欄は使用しない
 - re-join code は機密情報ではないが内部識別子なので、通常の画面には表示しない
 
 ## 5. Matchmaking Lobby
@@ -1090,11 +1100,12 @@ interface FinalStandingView {
 ### Re-join code で resume
 
 1. 起動時に `landing_page` を表示する
-2. client が local storage の re-join session を読み、code 内の期限を検証する
-3. 期限内の場合だけ保存済み signaling server へ接続し、server が code の存在と対象 game の復帰可否を検証する
-4. 有効な場合だけ「前のゲームに再参加」を表示する
-5. ボタンを押したら、以前の display name / playerId / hand で `game_play` へ遷移する
-6. 無効または失敗時は session を削除し、再参加ボタンを表示しない
+2. client がlocal storageの全re-join sessionと現在Tabのquery codeを集め、code内の期限を検証する
+3. 期限内の場合だけ各codeのsignaling serverへ問い合わせ、serverがcodeの存在、対象gameの復帰可否、room情報を返す
+4. 有効なcodeごとにroom名、参加枠数 / 上限、「前のゲームに再参加」を表示する
+5. 現在Tabのqueryと一致する候補を先頭へ並べ、薄い水色で強調する
+6. ボタンを押したら、以前の display name / playerId / hand で `game_play` へ遷移する
+7. 無効または失敗時は該当sessionを削除し、現在Tabのqueryと一致する場合はqueryも削除する
 
 ### 鍵なし room 作成
 
@@ -1239,9 +1250,11 @@ PixiJS 側は `BoardView` と `LocalHandView` の描画・ドラッグ操作に�
 - spectator は各プレイヤーの手札の色やカード内容を見られない
 - spectator 画面の右上には「退出」ボタンを表示する
 - online player name は同時重複不可
-- re-join code は game 開始時に server が期限を埋め込んで自動生成し、local storage に保存する
+- re-join code はgame開始時にserverが期限を埋め込んで自動生成し、codeごとのlocal storage entryと現在TabのURL queryに保存する
 - re-join code は最大30分、または game 終了のどちらか早い方まで有効
-- 有効性確認後だけ再参加ボタンを表示し、resume 時は以前の display name を使う
+- 同一browserの複数Tabのcodeをlocal storageで共存させ、各TabのqueryにはそのTab専用codeだけを保持する
+- local storageとquery由来の全codeを検証し、有効なroom情報と再参加ボタンを一覧表示する。現在Tabの候補は先頭かつ薄い水色にする
+- resume 時は以前の display name を使う
 - `waiting_room` 中の参加・退出では player list / host / seating / start 可否を再計算する
 - game play 中の他 player 切断は通常 UI には表示しない
 - game play 中に切断 player の手番が来た場合、host は 5秒 + 0〜3秒後に通常 action として代行 commit する

@@ -176,6 +176,11 @@
       "waitingRoomNeedsPlayers": "開始には2名以上のプレイヤーが必要です。"
     }
   },
+  "rejoin": {
+    "availableGames": "再参加できるゲーム",
+    "currentTab": "このタブ",
+    "playerCount": "参加人数 {count} / {max}"
+  },
   "role": {
     "host": "ホスト",
     "player": "プレイヤー",

@@ -138,6 +138,14 @@ test('uses compact mobile scoreboard and confirms leaving during game play', asy
     await expect(peerA.page.locator('[data-channel-state]')).toHaveText('Open', { timeout: 15000 });
     await readyPlayers(peerA.page, peerB.page);
     await expect(peerA.page.locator('canvas')).toBeVisible();
+    await expect.poll(() => getStoredRejoinSessions(peerA.page), { timeout: 15000 }).toHaveLength(1);
+    const [peerARejoinSession] = await getStoredRejoinSessions(peerA.page);
+
+    if (!peerARejoinSession) {
+      throw new Error('Peer A did not persist a re-join session.');
+    }
+
+    expect(new URL(peerA.page.url()).searchParams.get('rejoin-code')).toBe(peerARejoinSession.rejoinCode);
     const playAreaLayout = await peerA.page.evaluate(() => {
       const actionBar = document.querySelector('.action-bar')?.getBoundingClientRect();
       const message = document.querySelector('[data-game-message]')?.getBoundingClientRect();
@@ -209,6 +217,9 @@ test('uses compact mobile scoreboard and confirms leaving during game play', asy
     await expect(peerA.page.locator('main[data-scene="matchmaking_lobby"]')).toBeVisible({ timeout: 15000 });
     await expect(peerA.page.locator('[data-room-list]')).toBeVisible();
     await expect(peerA.page.locator('[data-player-name]')).toHaveValue(names[0]);
+    expect(new URL(peerA.page.url()).searchParams.get('rejoin-code')).toBeNull();
+    expect((await getStoredRejoinSessions(peerA.page)).map((session) => session.rejoinCode))
+      .not.toContain(peerARejoinSession.rejoinCode);
 
     expect(peerA.consoleErrors).toEqual([]);
     expect(peerB.consoleErrors).toEqual([]);
@@ -471,22 +482,31 @@ test('resumes a disconnected player with a re-join code', async ({ browser }, te
     await readyPlayers(peerA.page, peerB.page);
     await expect(peerB.page.locator('[data-rejoin-code-input]')).toHaveCount(0);
     await expect(peerB.page.locator('[data-rejoin-code]')).toHaveCount(0);
-    await expect.poll(() => getStoredRejoinSession(peerB.page), { timeout: 15000 }).not.toBeNull();
-    const storedSession = await peerB.page.evaluate(() => {
-      const raw = window.localStorage.getItem('penguin-party.rejoinSession');
-      return raw ? JSON.parse(raw) as { rejoinCode: string; signalingServerUrl: string } : null;
-    });
+    await expect.poll(() => getStoredRejoinSessions(peerB.page), { timeout: 15000 }).toHaveLength(1);
+    const [storedSession] = await getStoredRejoinSessions(peerB.page);
+
+    if (!storedSession) {
+      throw new Error('Peer B did not persist a re-join session.');
+    }
+
     const expiresAt = Number.parseInt(storedSession?.rejoinCode.split('.')[1] ?? '', 36);
 
     expect(storedSession?.rejoinCode).toBeTruthy();
     expect(expiresAt).toBeGreaterThan(Date.now());
     expect(expiresAt).toBeLessThanOrEqual(Date.now() + 30 * 60 * 1000);
-    expect(new URL(peerB.page.url()).searchParams.get('rejoin')).toBeNull();
+    expect(new URL(peerB.page.url()).searchParams.get('rejoin-code')).toBe(storedSession?.rejoinCode);
+
+    await peerB.page.evaluate((rejoinCode) => {
+      window.localStorage.removeItem(`penguin-party.rejoinSession.${encodeURIComponent(rejoinCode)}`);
+    }, storedSession.rejoinCode);
+    expect(await getStoredRejoinSessions(peerB.page)).toHaveLength(0);
 
     await peerB.page.reload();
-    await expect(peerB.page.locator('[data-rejoin-game]')).toBeVisible({ timeout: 15000 });
+    await expect(peerB.page.locator('[data-rejoin-current-tab="true"]')).toBeVisible({ timeout: 15000 });
+    await expect(peerB.page.locator('[data-rejoin-room-id]')).toHaveAttribute('data-current-tab', 'true');
+    await expect.poll(() => getStoredRejoinSessions(peerB.page)).toHaveLength(1);
     expect(await getLocalPlayerName(peerB.page)).toBe('none');
-    await peerB.page.locator('[data-rejoin-game]').click();
+    await peerB.page.locator('[data-rejoin-current-tab="true"]').click();
 
     await expect.poll(() => getLocalPlayerName(peerB.page), { timeout: 15000 }).toBe(names[1]);
     await expect.poll(() => getStateHash(peerB.page), { timeout: 30000 }).not.toBe('none');
@@ -498,6 +518,84 @@ test('resumes a disconnected player with a re-join code', async ({ browser }, te
     expect(peerB.failedRequests).toEqual([]);
   } finally {
     await Promise.allSettled([peerA.context.close(), peerB.context.close()]);
+  }
+});
+
+test('keeps tab-specific re-join codes across two simultaneous reloads', async ({ browser }, testInfo) => {
+  const names = peerNames('Tabs', testInfo.project.name, 3);
+  const host = await openPeer(browser, { width: 1280, height: 720 });
+  const sharedContext = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const tabOne = await sharedContext.newPage();
+  const tabTwo = await sharedContext.newPage();
+  const tabOneTelemetry = trackPageErrors(tabOne);
+  const tabTwoTelemetry = trackPageErrors(tabTwo);
+
+  try {
+    await host.page.goto('/');
+    await tabOne.goto('/');
+    await tabTwo.goto('/');
+
+    await enterMatchmaking(host.page, names[0]);
+    await enterMatchmaking(tabOne, names[1]);
+    await enterMatchmaking(tabTwo, names[2]);
+    await createRoom(host.page);
+    const roomId = (await host.page.locator('[data-room-id]').textContent())?.trim();
+
+    if (!roomId) {
+      throw new Error('Host did not create a room code.');
+    }
+
+    await joinRoomFromList(tabOne, roomId);
+    await joinRoomFromList(tabTwo, roomId);
+    await expect(host.page.locator('[data-player-count]')).toHaveText('3', { timeout: 15000 });
+
+    for (const page of [host.page, tabOne, tabTwo]) {
+      await expect(page.locator('[data-connected-count]')).toHaveText('3', { timeout: 15000 });
+    }
+
+    await readyPlayers(host.page, tabOne, tabTwo);
+    await expect(host.page.locator('canvas')).toBeVisible();
+    await expect(tabOne.locator('canvas')).toBeVisible();
+    await expect(tabTwo.locator('canvas')).toBeVisible();
+    await expect.poll(() => getStoredRejoinSessions(tabOne), { timeout: 15000 }).toHaveLength(2);
+
+    const tabOneCode = new URL(tabOne.url()).searchParams.get('rejoin-code');
+    const tabTwoCode = new URL(tabTwo.url()).searchParams.get('rejoin-code');
+    const storedCodes = (await getStoredRejoinSessions(tabOne)).map((session) => session.rejoinCode);
+
+    expect(tabOneCode).toBeTruthy();
+    expect(tabTwoCode).toBeTruthy();
+    expect(tabOneCode).not.toBe(tabTwoCode);
+    expect(storedCodes).toEqual(expect.arrayContaining([tabOneCode, tabTwoCode]));
+
+    await Promise.all([tabOne.reload(), tabTwo.reload()]);
+
+    for (const tab of [tabOne, tabTwo]) {
+      await expect(tab.locator('[data-rejoin-room-id]')).toHaveCount(2, { timeout: 15000 });
+      await expect(tab.locator('[data-rejoin-room-id]').first()).toHaveAttribute('data-current-tab', 'true');
+      await expect(tab.locator('[data-rejoin-room-id]').first()).toContainText('3 / 6 players');
+    }
+
+    await Promise.all([
+      tabOne.locator('[data-rejoin-current-tab="true"]').click(),
+      tabTwo.locator('[data-rejoin-current-tab="true"]').click(),
+    ]);
+
+    await expect.poll(() => getLocalPlayerName(tabOne), { timeout: 15000 }).toBe(names[1]);
+    await expect.poll(() => getLocalPlayerName(tabTwo), { timeout: 15000 }).toBe(names[2]);
+    await expect.poll(() => getStateHash(tabOne), { timeout: 30000 }).toBe(await getStateHash(host.page));
+    await expect.poll(() => getStateHash(tabTwo), { timeout: 30000 }).toBe(await getStateHash(host.page));
+    expect(new URL(tabOne.url()).searchParams.get('rejoin-code')).toBe(tabOneCode);
+    expect(new URL(tabTwo.url()).searchParams.get('rejoin-code')).toBe(tabTwoCode);
+
+    expect(host.consoleErrors).toEqual([]);
+    expect(tabOneTelemetry.consoleErrors).toEqual([]);
+    expect(tabTwoTelemetry.consoleErrors).toEqual([]);
+    expect(host.failedRequests).toEqual([]);
+    expect(tabOneTelemetry.failedRequests).toEqual([]);
+    expect(tabTwoTelemetry.failedRequests).toEqual([]);
+  } finally {
+    await Promise.allSettled([host.context.close(), sharedContext.close()]);
   }
 });
 
@@ -552,11 +650,33 @@ async function openPeer(browser: Browser, viewport: { width: number; height: num
       consoleErrors.push(message.text());
     }
   });
+  page.on('pageerror', (error) => {
+    consoleErrors.push(error.message);
+  });
   page.on('requestfailed', (request) => {
     failedRequests.push(`${request.method()} ${request.url()}`);
   });
 
   return { context, page, consoleErrors, failedRequests };
+}
+
+function trackPageErrors(page: Page) {
+  const consoleErrors: string[] = [];
+  const failedRequests: string[] = [];
+
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  page.on('pageerror', (error) => {
+    consoleErrors.push(error.message);
+  });
+  page.on('requestfailed', (request) => {
+    failedRequests.push(`${request.method()} ${request.url()}`);
+  });
+
+  return { consoleErrors, failedRequests };
 }
 
 function peerNames(prefix: string, projectName: string, count: number) {
@@ -658,8 +778,14 @@ async function getStateHash(page: Page) {
   });
 }
 
-async function getStoredRejoinSession(page: Page) {
-  return page.evaluate(() => window.localStorage.getItem('penguin-party.rejoinSession'));
+async function getStoredRejoinSessions(page: Page) {
+  return page.evaluate(() => Object.keys(window.localStorage)
+    .filter((key) => key.startsWith('penguin-party.rejoinSession.'))
+    .map((key) => JSON.parse(window.localStorage.getItem(key) ?? 'null') as {
+      rejoinCode: string;
+      signalingServerUrl: string;
+    })
+    .filter(Boolean));
 }
 
 async function expectLocalPlayerHasMatchingGameState(page: Page, expectedName: string) {
